@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -11,13 +12,15 @@ namespace NinjaTrader.NinjaScript.AddOns
 {
     // AddOn entry de Idem. Arranca el motor de copy en la primera ventana creada
     // (patrón probado de PropCommand), leyendo idem-config.txt. El panel WPF viene
-    // en Fase 4; por ahora arranca el copy y loguea al Output.
+    // en Fase 4; por ahora arranca el copy + guard + mirror-stop y loguea al Output.
     public class Idem : AddOnBase
     {
         private static readonly object _initLock = new object();
         private static bool _booted;
 
         private PositionTracker _tracker;
+        private DayPnlCache _dayCache;
+        private DayPnlPoll _dayPoll;
         private FillMonitor _fills;
         private CopyEngine _engine;
 
@@ -31,6 +34,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 try { _engine?.Stop(); } catch { }
                 try { _fills?.StopAll(); } catch { }
+                try { _dayPoll?.Stop(); } catch { }
             }
         }
 
@@ -58,24 +62,34 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Account.All) return Account.All.FirstOrDefault(a => a.Name == name);
             };
 
-            // Fase 2/3: P// Fase 2: DD real todavía no cableado → 0 (el guard no bloquea).L del día todavía no cableado → 0 (el guard no bloquea: 0 <= -limite es false).
-            // Se conecta el P// Se conecta el DD real en Fase 3/4; el guard ya está probado en aislamiento.L real del día en Fase 3 Task 3; el guard ya está probado en aislamiento.
-            Func<Account, double> dayPnl = acc => 0.0;
+            // Guard real: P&L del día (realized+unrealized) por cuenta, cacheado desde
+            // el UI-thread por DayPnlPoll; el guard lo lee de acá desde cualquier thread.
+            _dayCache = new DayPnlCache();
+            Func<Account, double> dayPnl = acc => _dayCache.Get(acc.Name);
 
             _tracker = new PositionTracker();
-            _engine = new CopyEngine(_tracker, cfg, resolve, dayPnl);
+
+            // Mirror-stop: reconcilia el stop de protección en cada sweep.
+            var stopExec = new StopExecutor(_tracker, cfg, resolve);
+            _engine = new CopyEngine(_tracker, cfg, resolve, dayPnl,
+                inst => stopExec.ReconcileStops(inst));
+
             _fills = new FillMonitor(_tracker, (m, net, inst) => _engine.OnMasterFill(m, net, inst));
 
             var master = resolve(cfg.MasterAccount);
             if (master != null) _fills.Watch(master, true);
             else Log("master no encontrado: " + cfg.MasterAccount);
 
+            var slaveAccounts = new List<Account>();
             foreach (var sc in cfg.Slaves)
             {
                 var acc = resolve(sc.Account);
-                if (acc != null) _fills.Watch(acc, false);
+                if (acc != null) { _fills.Watch(acc, false); slaveAccounts.Add(acc); }
                 else Log("slave no encontrado: " + sc.Account);
             }
+
+            _dayPoll = new DayPnlPoll(_dayCache, slaveAccounts);
+            _dayPoll.Start();
 
             _engine.Start();
             Log("motor arrancado (master " + cfg.MasterAccount + ", " + cfg.Slaves.Count + " slaves, enabled=" + cfg.Enabled + ")");

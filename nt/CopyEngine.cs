@@ -14,13 +14,15 @@ namespace Idem.Nt
         private readonly IdemConfig _cfg;
         private readonly Func<string, Account> _resolve;
         private readonly Func<Account, double> _dayPnl;   // P&L del día por cuenta (realized+unrealized)
+        private readonly Action<Instrument> _onSweepTick;
         private Timer _sweep;
         private Instrument _lastInstrument;
 
         public CopyEngine(PositionTracker tracker, IdemConfig cfg,
-            Func<string, Account> resolve, Func<Account, double> dayPnl)
+            Func<string, Account> resolve, Func<Account, double> dayPnl,
+            Action<Instrument> onSweepTick = null)
         {
-            _tracker = tracker; _cfg = cfg; _resolve = resolve; _dayPnl = dayPnl;
+            _tracker = tracker; _cfg = cfg; _resolve = resolve; _dayPnl = dayPnl; _onSweepTick = onSweepTick;
         }
 
         public void OnMasterFill(string masterName, int masterNet, Instrument instrument)
@@ -49,6 +51,7 @@ namespace Idem.Nt
                 if (master == null) return;
                 int masterNet = _tracker.Net(master.Name + "|" + _lastInstrument.FullName);
                 Reconcile(masterNet, _lastInstrument);
+                try { _onSweepTick?.Invoke(_lastInstrument); } catch { }
             }
             catch { }
         }
