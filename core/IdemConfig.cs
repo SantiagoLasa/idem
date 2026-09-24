@@ -6,23 +6,21 @@ namespace Idem.Core
     public struct SlaveConfig
     {
         public string Account;
-        public double DdLimit;
+        public double DailyLossLimit;  // pérdida del día a la que frenar entradas
     }
 
-    // Config del copy: master, slaves (con su límite de DD), colchón del guard, on/off.
-    // Formato línea por línea (clave=valor) — sin dependencias de JSON, así compila en
-    // NT8 net48 (que no trae System.Text.Json) y en net8.0 (test). Fácil de editar a mano:
+    // Config del copy: master, slaves (con su tope de pérdida diaria), on/off.
+    // Formato línea por línea (clave=valor) — sin dependencias de JSON (NT8 net48 no
+    // trae System.Text.Json). Fácil de editar a mano:
     //   master=Sim101
-    //   cushion=400
     //   enabled=true
-    //   slave=SimAccount1,2500
-    //   slave=SimAccount2,3000
+    //   slave=SimAccount1,250
+    //   slave=SimAccount2,500
     // Líneas vacías y las que empiezan con '#' se ignoran.
     public sealed class IdemConfig
     {
         public string MasterAccount;
         public List<SlaveConfig> Slaves = new List<SlaveConfig>();
-        public double Cushion;
         public bool Enabled;
 
         public static IdemConfig Parse(string text)
@@ -46,9 +44,6 @@ namespace Idem.Core
                     case "master":
                         cfg.MasterAccount = val;
                         break;
-                    case "cushion":
-                        cfg.Cushion = double.Parse(val, CultureInfo.InvariantCulture);
-                        break;
                     case "enabled":
                         cfg.Enabled = val == "true" || val == "1";
                         break;
@@ -58,7 +53,7 @@ namespace Idem.Core
                             cfg.Slaves.Add(new SlaveConfig
                             {
                                 Account = parts[0].Trim(),
-                                DdLimit = double.Parse(parts[1].Trim(), CultureInfo.InvariantCulture)
+                                DailyLossLimit = double.Parse(parts[1].Trim(), CultureInfo.InvariantCulture)
                             });
                         break;
                 }

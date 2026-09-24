@@ -2,18 +2,18 @@ using System;
 
 namespace Idem.Core
 {
-    // Guard de drawdown liviano: una resta y una comparación. Bloquea SÓLO órdenes
-    // que aumentan la exposición absoluta (entradas) cuando la cuenta está a menos
-    // de `cushion` dólares de su límite de DD. Las reducciones/salidas SIEMPRE pasan:
-    // siempre tenés que poder cerrar. Sin heurístico de stop por instrumento.
+    // Stop de pérdida diaria: bloquea entradas NUEVAS cuando el P&L del día
+    // (realized + unrealized) llegó a -dailyLossLimit. Ej: dailyLossLimit=250 →
+    // bloquea a dayPnl <= -250. NO es proximidad al drawdown: es un tope de pérdida
+    // del día para dejar de operar. Las reducciones/salidas SIEMPRE pasan.
     public static class RiskGuard
     {
         public static bool ShouldBlock(int slaveNetBefore, int slaveNetAfter,
-            double currentDrawdown, double ddLimit, double cushion)
+            double dayPnl, double dailyLossLimit)
         {
             bool increasesExposure = Math.Abs(slaveNetAfter) > Math.Abs(slaveNetBefore);
             if (!increasesExposure) return false; // salidas/reducciones nunca se bloquean
-            return currentDrawdown + cushion >= ddLimit;
+            return dayPnl <= -dailyLossLimit;
         }
     }
 }

@@ -58,12 +58,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Account.All) return Account.All.FirstOrDefault(a => a.Name == name);
             };
 
-            // Fase 2: DD real todavía no cableado → 0 (el guard no bloquea).
-            // Se conecta el DD real en Fase 3/4; el guard ya está probado en aislamiento.
-            Func<Account, double> drawdown = acc => 0.0;
+            // Fase 2/3: P// Fase 2: DD real todavía no cableado → 0 (el guard no bloquea).L del día todavía no cableado → 0 (el guard no bloquea: 0 <= -limite es false).
+            // Se conecta el P// Se conecta el DD real en Fase 3/4; el guard ya está probado en aislamiento.L real del día en Fase 3 Task 3; el guard ya está probado en aislamiento.
+            Func<Account, double> dayPnl = acc => 0.0;
 
             _tracker = new PositionTracker();
-            _engine = new CopyEngine(_tracker, cfg, resolve, drawdown);
+            _engine = new CopyEngine(_tracker, cfg, resolve, dayPnl);
             _fills = new FillMonitor(_tracker, (m, net, inst) => _engine.OnMasterFill(m, net, inst));
 
             var master = resolve(cfg.MasterAccount);

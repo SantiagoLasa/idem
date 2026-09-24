@@ -13,14 +13,14 @@ namespace Idem.Nt
         private readonly PositionTracker _tracker;
         private readonly IdemConfig _cfg;
         private readonly Func<string, Account> _resolve;
-        private readonly Func<Account, double> _drawdown;
+        private readonly Func<Account, double> _dayPnl;   // P&L del día por cuenta (realized+unrealized)
         private Timer _sweep;
         private Instrument _lastInstrument;
 
         public CopyEngine(PositionTracker tracker, IdemConfig cfg,
-            Func<string, Account> resolve, Func<Account, double> drawdown)
+            Func<string, Account> resolve, Func<Account, double> dayPnl)
         {
-            _tracker = tracker; _cfg = cfg; _resolve = resolve; _drawdown = drawdown;
+            _tracker = tracker; _cfg = cfg; _resolve = resolve; _dayPnl = dayPnl;
         }
 
         public void OnMasterFill(string masterName, int masterNet, Instrument instrument)
@@ -68,12 +68,12 @@ namespace Idem.Nt
                 {
                     Id = sc.Account,
                     Net = _tracker.Net(sc.Account + "|" + instrument.FullName),
-                    Drawdown = _drawdown(acc),
-                    DdLimit = sc.DdLimit
+                    DayPnl = _dayPnl(acc),
+                    DailyLossLimit = sc.DailyLossLimit
                 });
             }
 
-            foreach (var d in CopyDecision.ForMasterNet(masterNet, states, _cfg.Cushion))
+            foreach (var d in CopyDecision.ForMasterNet(masterNet, states))
             {
                 if (d.Blocked || d.Action == Idem.Core.OrderAction.None) continue;
                 if (byId.TryGetValue(d.Id, out var acc))
