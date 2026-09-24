@@ -419,7 +419,7 @@ Expected: PASS (todos).
 cd "/c/Users/santi/OneDrive/Documentos/NinjaTrader 8/bin/Custom/Idem" && git add core/IdemConfig.cs && git commit -m "feat(core): IdemConfig (modelo + parse JSON)"
 ```
 
-> **NOTA para F5 (Task 6):** si `System.Text.Json` no está disponible en tu NT8 net48, reemplazar `Parse` por un parser manual (el JSON es fijo y simple). Se decide al primer F5.
+> **Resuelto en F5:** NT8 net48 NO trae `System.Text.Json` (CS0234). `Parse` usa un parser manual línea-por-línea, sin dependencias.
 
 ---
 
@@ -763,8 +763,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private void Boot()
         {
-            string path = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "bin", "Custom", "Idem", "idem-config.json");
-            if (!File.Exists(path)) { NinjaTrader.Code.Output.Process("Idem: no idem-config.json", PrintTo.OutputTab1); return; }
+            string path = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "bin", "Custom", "Idem", "idem-config.txt");
+            if (!File.Exists(path)) { NinjaTrader.Code.Output.Process("Idem: no idem-config.txt", PrintTo.OutputTab1); return; }
             var cfg = IdemConfig.Parse(File.ReadAllText(path));
 
             Func<string, Account> resolve = name => Account.All.FirstOrDefault(a => a.Name == name);
@@ -799,7 +799,7 @@ F5. Expected: compila limpio. Ajustar firmas de NT8 si hace falta (`AddOnBase`, 
 
 - [ ] **Step 4: Verificar en SIM — escenario completo**
 
-1. Crear `bin\Custom\Idem\idem-config.json` con master = Sim101 y 2 slaves de simulación.
+1. Crear `bin\Custom\Idem\idem-config.txt` con master = Sim101 y 2 slaves de simulación.
 2. Reiniciar NT8 (o re-F5), conectar el broker de simulación.
 3. **Carrera de arranque:** confirmar en Output "Idem: motor arrancado".
 4. **Entrada:** comprar 1 contrato en Sim101 → los 2 slaves compran 1 (verificar en sus posiciones).
