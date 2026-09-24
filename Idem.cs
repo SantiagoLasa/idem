@@ -14,14 +14,18 @@ using Idem.Ui;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
-    // AddOn entry de Idem. Arranca el motor de copy en la primera ventana creada
-    // (patrón probado de PropCommand), leyendo idem-config.txt. El panel WPF viene
-    // en Fase 4; por ahora arranca el copy + guard + mirror-stop y loguea al Output.
+    // AddOn entry de Idem. Arranca el motor de copy en la primera ventana creada,
+    // agrega el menú "Idem" al Control Center, y expone Reconfigure para editar la
+    // config en vivo desde el dashboard (re-watchea cuentas + reescribe el .txt).
     public class Idem : AddOnBase
     {
         private static readonly object _initLock = new object();
         private static bool _booted;
         private NTMenuItem _menu;
+
+        private IdemConfig _cfg;
+        private Func<string, Account> _resolve;
+        private string _configPath;
 
         private PositionTracker _tracker;
         private DayPnlCache _dayCache;
@@ -57,8 +61,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception ex) { Log("menu error: " + ex.Message); }
         }
 
-        // Agrega "Idem → Dashboard" al menú New del Control Center. Idempotente: saca
-        // los ítems viejos de compilaciones previas antes de agregar (patrón PropCommand).
         private void AddMenu(Window window)
         {
             var cc = window as ControlCenter;
@@ -79,21 +81,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private void Boot()
         {
-            string path = Path.Combine(NinjaTrader.Core.Globals.UserDataDir,
+            _configPath = Path.Combine(NinjaTrader.Core.Globals.UserDataDir,
                 "bin", "Custom", "Idem", "idem-config.txt");
-            if (!File.Exists(path)) { Log("no idem-config.txt en " + path); return; }
+            if (!File.Exists(_configPath)) { Log("no idem-config.txt en " + _configPath); return; }
 
-            var cfg = IdemConfig.Parse(File.ReadAllText(path));
+            _cfg = IdemConfig.Parse(File.ReadAllText(_configPath));
 
             try { lock (Account.All) Log("cuentas disponibles: " + string.Join(", ", Account.All.Select(a => a.Name))); } catch { }
 
-            Func<string, Account> resolve = name =>
+            _resolve = name =>
             {
-                lock (Account.All) return Account.All.FirstOrDefault(a => string.Equals(a.Name, name, System.StringComparison.OrdinalIgnoreCase));
+                lock (Account.All) return Account.All.FirstOrDefault(a => string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase));
             };
 
-            // Guard real: P&L del día (realized+unrealized) por cuenta, cacheado desde
-            // el UI-thread por DayPnlPoll; el guard lo lee de acá desde cualquier thread.
             _dayCache = new DayPnlCache();
             Func<Account, double> dayPnl = acc => _dayCache.Get(acc.Name);
 
@@ -103,14 +103,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Tracker = _tracker,
                 DayCache = _dayCache,
-                Config = cfg,
-                Resolve = resolve
+                Config = _cfg,
+                Resolve = _resolve,
+                Reconfigure = Reconfigure
             };
 
-            // Mirror-stop: reconcilia el stop de protección en cada sweep.
-            var stopExec = new StopExecutor(_tracker, cfg, resolve);
-            _engine = new CopyEngine(_tracker, cfg, resolve, dayPnl,
+            var stopExec = new StopExecutor(_tracker, _cfg, _resolve);
+            _engine = new CopyEngine(_tracker, _cfg, _resolve, dayPnl,
                 inst => stopExec.ReconcileStops(inst));
+
+            WireWatches();
+            _engine.Start();
+            Log("motor arrancado (master " + _cfg.MasterAccount + ", " + _cfg.Slaves.Count + " slaves, enabled=" + _cfg.Enabled + ")");
+        }
+
+        // Arma (o rearma) la suscripción a fills y el poll de P&L para el master/slaves
+        // actuales de _cfg. Reusado por Boot y Reconfigure.
+        private void WireWatches()
+        {
+            try { _fills?.StopAll(); } catch { }
+            try { _dayPoll?.Stop(); } catch { }
 
             _fills = new FillMonitor(_tracker, (m, net, inst) =>
             {
@@ -118,23 +130,37 @@ namespace NinjaTrader.NinjaScript.AddOns
                 _engine.OnMasterFill(m, net, inst);
             });
 
-            var master = resolve(cfg.MasterAccount);
+            var master = _resolve(_cfg.MasterAccount);
             if (master != null) _fills.Watch(master, true);
-            else Log("master no encontrado: " + cfg.MasterAccount);
+            else Log("master no encontrado: " + _cfg.MasterAccount);
 
             var slaveAccounts = new List<Account>();
-            foreach (var sc in cfg.Slaves)
+            foreach (var sc in _cfg.Slaves)
             {
-                var acc = resolve(sc.Account);
+                var acc = _resolve(sc.Account);
                 if (acc != null) { _fills.Watch(acc, false); slaveAccounts.Add(acc); }
                 else Log("slave no encontrado: " + sc.Account);
             }
 
             _dayPoll = new DayPnlPoll(_dayCache, slaveAccounts);
             _dayPoll.Start();
+        }
 
-            _engine.Start();
-            Log("motor arrancado (master " + cfg.MasterAccount + ", " + cfg.Slaves.Count + " slaves, enabled=" + cfg.Enabled + ")");
+        // Aplica una config nueva en vivo: muta la instancia que el motor ya referencia,
+        // rearma watches/poll, y persiste al .txt. Sin reiniciar NT8.
+        private void Reconfigure(IdemConfig newCfg)
+        {
+            if (newCfg == null || _cfg == null) return;
+            _cfg.MasterAccount = newCfg.MasterAccount;
+            _cfg.Enabled = newCfg.Enabled;
+            _cfg.Slaves.Clear();
+            _cfg.Slaves.AddRange(newCfg.Slaves);
+
+            WireWatches();
+
+            try { File.WriteAllText(_configPath, IdemConfigWriter.ToText(_cfg)); }
+            catch (Exception ex) { Log("persist error: " + ex.Message); }
+            Log("reconfigurado (master " + _cfg.MasterAccount + ", " + _cfg.Slaves.Count + " slaves)");
         }
 
         private static void Log(string msg)

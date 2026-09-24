@@ -19,6 +19,8 @@ namespace Idem.Ui
         private readonly StackPanel _fleet = new StackPanel();
         private readonly StackPanel _feed = new StackPanel();
         private readonly TextBlock _status = new TextBlock();
+        private readonly TextBox _cfgBox = new TextBox();
+        private readonly TextBlock _cfgMsg = new TextBlock();
         private readonly Button _pauseBtn = new Button();
         private DispatcherTimer _timer;
 
@@ -70,6 +72,26 @@ namespace Idem.Ui
             root.Children.Add(_fleet);
             root.Children.Add(feedTitle);
             root.Children.Add(_feed);
+
+            var cfgTitle = new TextBlock { Text = "Config (editar y Guardar — sin reiniciar)", Foreground = Dim, FontSize = 12, Margin = new Thickness(0, 18, 0, 4) };
+            _cfgBox.AcceptsReturn = true;
+            _cfgBox.MinLines = 5;
+            _cfgBox.FontFamily = new FontFamily("Consolas");
+            _cfgBox.Background = new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x18));
+            _cfgBox.Foreground = Brushes.White;
+            _cfgBox.BorderBrush = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x2e));
+            _cfgBox.Padding = new Thickness(6);
+            var rt0 = IdemRuntime.Instance;
+            if (rt0 != null && rt0.Config != null) _cfgBox.Text = IdemConfigWriter.ToText(rt0.Config);
+            var saveBtn = new Button { Content = "Guardar config", Padding = new Thickness(12, 3, 12, 3), Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+            saveBtn.Click += (s, e) => SaveConfig();
+            _cfgMsg.Foreground = Dim; _cfgMsg.FontSize = 11; _cfgMsg.Margin = new Thickness(0, 4, 0, 0);
+
+            root.Children.Add(cfgTitle);
+            root.Children.Add(_cfgBox);
+            root.Children.Add(saveBtn);
+            root.Children.Add(_cfgMsg);
+
             Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
 
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
@@ -151,6 +173,20 @@ namespace Idem.Ui
             _feed.Children.Clear();
             foreach (var line in rt.RecentFeed())
                 _feed.Children.Add(new TextBlock { Text = line, Foreground = Dim, FontSize = 11, Margin = new Thickness(0, 1, 0, 1) });
+        }
+
+        private void SaveConfig()
+        {
+            var rt = IdemRuntime.Instance;
+            if (rt == null || rt.Reconfigure == null) { _cfgMsg.Text = "motor no arrancado"; return; }
+            try
+            {
+                var cfg = IdemConfig.Parse(_cfgBox.Text);
+                if (string.IsNullOrWhiteSpace(cfg.MasterAccount)) { _cfgMsg.Text = "falta master="; return; }
+                rt.Reconfigure(cfg);
+                _cfgMsg.Text = "guardado y aplicado (" + cfg.Slaves.Count + " slaves)";
+            }
+            catch (Exception ex) { _cfgMsg.Text = "error: " + ex.Message; }
         }
 
         private UIElement RowUi(FleetRow r)

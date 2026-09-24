@@ -14,6 +14,7 @@ namespace Idem.Nt
         public DayPnlCache DayCache;
         public IdemConfig Config;
         public System.Func<string, Account> Resolve;
+        public System.Action<IdemConfig> Reconfigure;
         public Instrument LastInstrument;
 
         private readonly LinkedList<string> _feed = new LinkedList<string>();
