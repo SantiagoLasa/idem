@@ -15,9 +15,12 @@
 - **Casing de nombres de cuenta**: el resolve era case-sensitive (sim102 no matcheaba). Ahora es `OrdinalIgnoreCase` + loguea `cuentas disponibles` al arrancar.
 - **Gotcha operativo:** editar el `idem-config.txt` requiere **reiniciar NT8** (no alcanza F5) para que Idem lo relea — el Boot corre en OnWindowCreated.
 
+### Done (cont.)
+- [x] **Fase 4 — Dashboard WPF COMPLETA Y VALIDADA.** Menú "Idem → Dashboard" en el Control Center; ventana con: flota en vivo (net, P&L del día, ⚠ guard bloqueando), feed de réplicas, controles **Pausa/Reanudar** (togglea `Config.Enabled`) y **FLATTEN ALL** (flatea master+slaves), y **editor de config en vivo** (TextBox + Guardar → `Reconfigure` re-watchea cuentas + reescribe el `.txt`, sin reiniciar). Núcleos puros: `FleetView`, `IdemConfigWriter`. Estado vivo publicado por `IdemRuntime`. Gotchas de F5: `OrderAction` ambiguo (alias), `FlattenEverything()` es estático (`Account.FlattenEverything()`), `Flatten(Instrument[])` es de instancia. 46 tests verdes.
+
 ### Next up
-- **Fase 4 — Dashboard WPF**: el panel que el usuario ya está pidiendo — setear master/slaves/topes + on/off desde UI (hoy sólo el `idem-config.txt`, se lee 1 vez al arrancar), flota en vivo, feed de réplicas, Flatten/Pausa.
-- **Fase 5 — Calendar** local.
+- **Fase 5 — Calendar** local (P&L diario, 5pm ET, persistencia) — última fase.
+- Antes de real: bajar los topes de pérdida diaria a valores reales (están en 5000 para tests) y probar más en SIM.
 
 ### Done
 - [x] **Fase 1 — núcleos puros** (`core\`, testeados con `dotnet test`): `Sizing` (1:1), `RiskGuard` (bloquea entradas cerca del DD, nunca salidas), `Reconciler` (delta con signo → Buy/Sell/None), `Types` (OrderAction/ReconcileOrder).
