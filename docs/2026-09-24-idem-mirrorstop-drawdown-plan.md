@@ -4,7 +4,7 @@
 
 **Goal:** (A) Activar el RiskGuard cableando el drawdown real de cada slave, y (B) espejar un stop de protección en cada slave — reconcile-style (idempotente, sin huérfanos), no por eventos.
 
-**Architecture:** Igual que Fase 2: cerebro puro testeable + cáscara NT8 (F5/SIM). El drawdown se lee en el UI-thread (donde `Account.Get` funciona) y se cachea en un `DrawdownTracker` puro; el guard lo lee de ahí. El stop se reconcilia en el sweep de 1s: cada slave con posición debe tener un stop al precio del master; si no hay stop del master o el slave está flat, se cancela. La decisión es un núcleo puro (`StopMirror.Decide`); la cáscara lee/coloca/cancela.
+**Architecture:** Igual que Fase 2: cerebro puro testeable + cáscara NT8 (F5/SIM). El drawdown se lee en el UI-thread (donde `Account.Get` funciona) y se cachea en un `DayPnlCache` puro; el guard lo lee de ahí. El stop se reconcilia en el sweep de 1s: cada slave con posición debe tener un stop al precio del master; si no hay stop del master o el slave está flat, se cancela. La decisión es un núcleo puro (`StopMirror.Decide`); la cáscara lee/coloca/cancela.
 
 **Tech Stack:** C# (core net48/net8.0; nt NinjaTrader), xUnit.
 
@@ -22,38 +22,38 @@
 
 ---
 
-### Task 1: `DrawdownTracker` (puro)
+### Task 1: `DayPnlCache` (puro) — YA EJECUTADA 2026-09-24
 
 **Files:**
-- Create: `bin\Custom\Idem\core\DrawdownTracker.cs`
-- Test: `C:\dev\idem-tests\DrawdownTrackerTests.cs`
+- Create: `bin\Custom\Idem\core\DayPnlCache.cs`
+- Test: `C:\dev\idem-tests\DayPnlCacheTests.cs`
 
 **Interfaces:**
-- Produces: `Idem.Core.DrawdownTracker` con:
+- Produces: `Idem.Core.DayPnlCache` con:
   - `void Update(string account, double balance)` — actualiza el HWM (`hwm = max(hwm, balance)`) y guarda el último balance. Lo llama el poll del UI-thread.
   - `double Drawdown(string account)` — `max(0, hwm - last)`; `0` si la cuenta es desconocida. Lo lee el guard (cualquier thread).
 
 - [ ] **Step 1: Escribir el test que falla**
 
-Crear `C:\dev\idem-tests\DrawdownTrackerTests.cs`:
+Crear `C:\dev\idem-tests\DayPnlCacheTests.cs`:
 
 ```csharp
 using Idem.Core;
 using Xunit;
 
-public class DrawdownTrackerTests
+public class DayPnlCacheTests
 {
     [Fact]
     public void Unknown_IsZero()
     {
-        var t = new DrawdownTracker();
+        var t = new DayPnlCache();
         Assert.Equal(0, t.Drawdown("A"));
     }
 
     [Fact]
     public void AtPeak_DrawdownZero()
     {
-        var t = new DrawdownTracker();
+        var t = new DayPnlCache();
         t.Update("A", 50000);
         Assert.Equal(0, t.Drawdown("A"));
     }
@@ -61,7 +61,7 @@ public class DrawdownTrackerTests
     [Fact]
     public void BelowPeak_DrawdownIsGap()
     {
-        var t = new DrawdownTracker();
+        var t = new DayPnlCache();
         t.Update("A", 50000);   // pico
         t.Update("A", 49100);   // −900
         Assert.Equal(900, t.Drawdown("A"));
@@ -70,7 +70,7 @@ public class DrawdownTrackerTests
     [Fact]
     public void PeakTrailsUp_ThenMeasuresFromNewPeak()
     {
-        var t = new DrawdownTracker();
+        var t = new DayPnlCache();
         t.Update("A", 50000);
         t.Update("A", 50800);   // nuevo pico
         t.Update("A", 50300);   // −500 desde 50800
@@ -80,7 +80,7 @@ public class DrawdownTrackerTests
     [Fact]
     public void NeverNegative()
     {
-        var t = new DrawdownTracker();
+        var t = new DayPnlCache();
         t.Update("A", 50000);
         t.Update("A", 51000);
         Assert.Equal(0, t.Drawdown("A"));
@@ -90,12 +90,12 @@ public class DrawdownTrackerTests
 
 - [ ] **Step 2: Correr para verlo fallar**
 
-Run: `cd /c/dev/idem-tests && dotnet test --filter DrawdownTrackerTests`
-Expected: FAIL — `DrawdownTracker` no existe.
+Run: `cd /c/dev/idem-tests && dotnet test --filter DayPnlCacheTests`
+Expected: FAIL — `DayPnlCache` no existe.
 
 - [ ] **Step 3: Implementar**
 
-Crear `bin\Custom\Idem\core\DrawdownTracker.cs`:
+Crear `bin\Custom\Idem\core\DayPnlCache.cs`:
 
 ```csharp
 using System.Collections.Generic;
@@ -105,7 +105,7 @@ namespace Idem.Core
     // Drawdown por cuenta = cuánto está por debajo de su pico de balance (net-liq).
     // Update lo alimenta el poll del UI-thread (donde Account.Get funciona); Drawdown
     // lo lee el guard desde cualquier thread. Conservador: nunca subestima el DD.
-    public sealed class DrawdownTracker
+    public sealed class DayPnlCache
     {
         private struct Row { public double Hwm; public double Last; public bool Seen; }
         private readonly Dictionary<string, Row> _rows = new Dictionary<string, Row>();
@@ -144,7 +144,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd "/c/Users/santi/OneDrive/Documentos/NinjaTrader 8/bin/Custom/Idem" && git add core/DrawdownTracker.cs && git commit -m "feat(core): DrawdownTracker (DD por cuenta = HWM - balance actual)"
+cd "/c/Users/santi/OneDrive/Documentos/NinjaTrader 8/bin/Custom/Idem" && git add core/DayPnlCache.cs && git commit -m "feat(core): DayPnlCache (DD por cuenta = HWM - balance actual)"
 ```
 
 ---
@@ -294,21 +294,21 @@ cd "/c/Users/santi/OneDrive/Documentos/NinjaTrader 8/bin/Custom/Idem" && git add
 
 ---
 
-### Task 3: Drawdown real — poll UI-thread + wire del guard · F5 + SIM
+### Task 3: P&L del día real — poll UI-thread + wire del guard · F5 + SIM
 
 **Files:**
-- Create: `bin\Custom\Idem\nt\DrawdownPoll.cs`
+- Create: `bin\Custom\Idem\nt\DayPnlPoll.cs`
 - Modify: `bin\Custom\Idem\Idem.cs` (wire del callback `drawdown` + arranque del poll)
 
 **Interfaces:**
-- Consumes: `Idem.Core.DrawdownTracker`.
-- Produces: `Idem.Nt.DrawdownPoll` con constructor `(DrawdownTracker tracker, System.Collections.Generic.List<NinjaTrader.Cbi.Account> accounts)` y `Start()` / `Stop()`. Corre un `DispatcherTimer` en el UI-thread que lee el net-liq de cada cuenta y llama `tracker.Update`.
+- Consumes: `Idem.Core.DayPnlCache`.
+- Produces: `Idem.Nt.DayPnlPoll` con constructor `(DayPnlCache tracker, System.Collections.Generic.List<NinjaTrader.Cbi.Account> accounts)` y `Start()` / `Stop()`. Corre un `DispatcherTimer` en el UI-thread que lee el net-liq de cada cuenta y llama `tracker.Update`.
 
 > **Sin unit test (código NT8).** Verificación: F5 + SIM.
 
-- [ ] **Step 1: Implementar `DrawdownPoll`**
+- [ ] **Step 1: Implementar `DayPnlPoll`**
 
-Crear `bin\Custom\Idem\nt\DrawdownPoll.cs`:
+Crear `bin\Custom\Idem\nt\DayPnlPoll.cs`:
 
 ```csharp
 using System.Collections.Generic;
@@ -319,16 +319,16 @@ using Idem.Core;
 namespace Idem.Nt
 {
     // Lee el net-liquidation de cada cuenta en el UI-thread (donde Account.Get funciona;
-    // off-thread devuelve 0 — el bug de PropCommand) y alimenta el DrawdownTracker.
-    public sealed class DrawdownPoll
+    // off-thread devuelve 0 — el bug de PropCommand) y alimenta el DayPnlCache.
+    public sealed class DayPnlPoll
     {
-        private readonly DrawdownTracker _tracker;
+        private readonly DayPnlCache _cache;
         private readonly List<Account> _accounts;
         private DispatcherTimer _timer;
 
-        public DrawdownPoll(DrawdownTracker tracker, List<Account> accounts)
+        public DayPnlPoll(DayPnlCache cache, List<Account> accounts)
         {
-            _tracker = tracker;
+            _cache = cache;
             _accounts = accounts;
         }
 
@@ -357,8 +357,9 @@ namespace Idem.Nt
             {
                 try
                 {
-                    double nl = acc.Get(AccountItem.NetLiquidation, Currency.UsDollar);
-                    if (nl > 0) _tracker.Update(acc.Name, nl);
+                    double realized = acc.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
+                    double unrealized = acc.Get(AccountItem.UnrealizedProfitLoss, Currency.UsDollar);
+                    _cache.Update(acc.Name, realized + unrealized);
                 }
                 catch { }
             }
@@ -369,7 +370,7 @@ namespace Idem.Nt
 
 - [ ] **Step 2: Wire en `Idem.cs`**
 
-En `bin\Custom\Idem\Idem.cs`, agregar el `DrawdownTracker` + `DrawdownPoll` y cablear el callback `drawdown`. Reemplazar el bloque del `drawdown` placeholder:
+En `bin\Custom\Idem\Idem.cs`, agregar el `DayPnlCache` + `DayPnlPoll` y cablear el callback `drawdown`. Reemplazar el bloque del `drawdown` placeholder:
 
 Buscar en `Boot()`:
 ```csharp
@@ -379,15 +380,15 @@ Buscar en `Boot()`:
 ```
 Reemplazar por:
 ```csharp
-            _dd = new DrawdownTracker();
-            Func<Account, double> drawdown = acc => _dd.Drawdown(acc.Name);
+            _dd = new DayPnlCache();
+            Func<Account, double> dayPnl = acc => _dd.Get(acc.Name);
 ```
-Agregar el campo (arriba, con los otros): `private DrawdownTracker _dd; private DrawdownPoll _ddPoll;`
+Agregar el campo (arriba, con los otros): `private DayPnlCache _dd; private DayPnlPoll _ddPoll;`
 Después de resolver los slaves y antes de `_engine.Start();`, arrancar el poll con las cuentas slave resueltas:
 ```csharp
             var slaveAccounts = new System.Collections.Generic.List<Account>();
             foreach (var sc in cfg.Slaves) { var a = resolve(sc.Account); if (a != null) slaveAccounts.Add(a); }
-            _ddPoll = new DrawdownPoll(_dd, slaveAccounts);
+            _ddPoll = new DayPnlPoll(_dd, slaveAccounts);
             _ddPoll.Start();
 ```
 En `State.Terminated`, agregar `try { _ddPoll?.Stop(); } catch { }`.
@@ -398,15 +399,15 @@ F5. Expected: compila limpio. (Referencia de `Application.Current.Dispatcher` + 
 
 - [ ] **Step 4: SIM — el guard ahora bloquea**
 
-1. En `idem-config.txt`, poné un `ddLimit` bajo en un slave (ej. `slave=SimAccount1,300`) y `cushion=100`.
-2. Operá en el master y hacé que SimAccount1 acumule ~$250 de pérdida (baje ~$250 del pico).
-3. Intentá una entrada nueva desde el master → SimAccount1 **no** debe replicar la entrada (guard: 250+100 ≥ 300). El otro slave (límite normal) sí replica.
+1. En `idem-config.txt`, poné un tope bajo en un slave (ej. `slave=SimAccount1,150`).
+2. Operá en el master y hacé que SimAccount1 pierda ~$160 en el día (realized+unrealized).
+3. Intentá una entrada nueva desde el master → SimAccount1 **no** debe replicar la entrada (perdió más que 150 hoy). El otro slave (límite normal) sí replica.
 4. Confirmá que una **salida** en ese slave nunca se bloquea (cerrás en el master → SimAccount1 cierra igual).
 
 - [ ] **Step 5: Commit** (tras F5 + SIM)
 
 ```bash
-cd "/c/Users/santi/OneDrive/Documentos/NinjaTrader 8/bin/Custom/Idem" && git add nt/DrawdownPoll.cs Idem.cs && git commit -m "feat(nt): drawdown real (poll UI-thread de net-liq) → guard activo"
+cd "/c/Users/santi/OneDrive/Documentos/NinjaTrader 8/bin/Custom/Idem" && git add nt/DayPnlPoll.cs Idem.cs && git commit -m "feat(nt): drawdown real (poll UI-thread de net-liq) → guard activo"
 ```
 
 ---
@@ -577,4 +578,4 @@ cd "/c/Users/santi/OneDrive/Documentos/NinjaTrader 8/bin/Custom/Idem" && git add
 
 - **Cobertura del spec:** R3 (guard con DD real) → Tasks 1+3; R4 (stop de protección espejado) → Tasks 2+4. El resto (R5 sweep) ya está de Fase 2 y se reusa como hook.
 - **Placeholders:** ninguno. El `drawdown` que devolvía 0 (Fase 2) se reemplaza por el real en Task 3.
-- **Consistencia de tipos:** `DrawdownTracker.Update/Drawdown(string...)` (Task 1) → poll+guard (Task 3); `StopMirror.Decide(...)` (Task 2) → `StopExecutor` (Task 4); `CopyEngine` gana un `Action<Instrument> onSweepTick` opcional (Task 4 Step 1) usado en Idem.cs (Task 4 Step 3). El constructor de `CopyEngine` con el nuevo parámetro opcional no rompe la llamada existente de Fase 2 (default null) hasta que Task 4 la actualiza.
+- **Consistencia de tipos:** `DayPnlCache.Update/Drawdown(string...)` (Task 1) → poll+guard (Task 3); `StopMirror.Decide(...)` (Task 2) → `StopExecutor` (Task 4); `CopyEngine` gana un `Action<Instrument> onSweepTick` opcional (Task 4 Step 1) usado en Idem.cs (Task 4 Step 3). El constructor de `CopyEngine` con el nuevo parámetro opcional no rompe la llamada existente de Fase 2 (default null) hasta que Task 4 la actualiza.
