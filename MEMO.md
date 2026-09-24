@@ -9,6 +9,12 @@
 
 **Guard = stop de pérdida diaria** (no proximidad al drawdown): bloquea entradas nuevas cuando el P&L del día (realized+unrealized) llega a `-dailyLossLimit`. Config: `slave=cuenta,perdidaDiaria` (sin cushion). Para testear el stop hay que subir el tope alto (si no, el guard bloquea).
 
+### Bugs encontrados y resueltos (prueba extrema 2026-09-24, muchos contratos + TPs rápidos)
+- **RUNAWAY por órdenes duplicadas** (un slave llegó a −$1.8M): faltaba el guard de orden en vuelo. Se reconciliaba en cada fill + cada sweep sin nada que impidiera mandar una segunda orden antes de que el fill de la primera confirmara. Fix: `PendingIntents` (core, testeado) cableado en `CopyEngine` — un par no manda otra orden hasta que su net real llega al target o vence el timeout (3s). Era el `PendingIntentLedger` de PropCommand, simplificado de más.
+- **POSICIONES TRABADAS por desync del tracker**: el reconciler trabajaba sobre el tracker interno, que driftea bajo carga (NT8 dropea/batchea ExecutionUpdate), así que creía que los slaves matcheaban al master y no cerraba las colgadas. Fix: el safety sweep lee el net REAL del broker (`RealNet` desde `account.Positions`), re-seedea el tracker y reconcilia contra la verdad cada 1s → auto-destraba. Es el "broker-resync heal" de PropCommand. **Lección: el sweep SIEMPRE reconcilia contra el broker, nunca contra el tracker.**
+- **Casing de nombres de cuenta**: el resolve era case-sensitive (sim102 no matcheaba). Ahora es `OrdinalIgnoreCase` + loguea `cuentas disponibles` al arrancar.
+- **Gotcha operativo:** editar el `idem-config.txt` requiere **reiniciar NT8** (no alcanza F5) para que Idem lo relea — el Boot corre en OnWindowCreated.
+
 ### Next up
 - **Fase 4 — Dashboard WPF**: el panel que el usuario ya está pidiendo — setear master/slaves/topes + on/off desde UI (hoy sólo el `idem-config.txt`, se lee 1 vez al arrancar), flota en vivo, feed de réplicas, Flatten/Pausa.
 - **Fase 5 — Calendar** local.
