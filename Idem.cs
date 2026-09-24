@@ -57,9 +57,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var cfg = IdemConfig.Parse(File.ReadAllText(path));
 
+            try { lock (Account.All) Log("cuentas disponibles: " + string.Join(", ", Account.All.Select(a => a.Name))); } catch { }
+
             Func<string, Account> resolve = name =>
             {
-                lock (Account.All) return Account.All.FirstOrDefault(a => a.Name == name);
+                lock (Account.All) return Account.All.FirstOrDefault(a => string.Equals(a.Name, name, System.StringComparison.OrdinalIgnoreCase));
             };
 
             // Guard real: P&L del día (realized+unrealized) por cuenta, cacheado desde
@@ -69,12 +71,24 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             _tracker = new PositionTracker();
 
+            IdemRuntime.Instance = new IdemRuntime
+            {
+                Tracker = _tracker,
+                DayCache = _dayCache,
+                Config = cfg,
+                Resolve = resolve
+            };
+
             // Mirror-stop: reconcilia el stop de protección en cada sweep.
             var stopExec = new StopExecutor(_tracker, cfg, resolve);
             _engine = new CopyEngine(_tracker, cfg, resolve, dayPnl,
                 inst => stopExec.ReconcileStops(inst));
 
-            _fills = new FillMonitor(_tracker, (m, net, inst) => _engine.OnMasterFill(m, net, inst));
+            _fills = new FillMonitor(_tracker, (m, net, inst) =>
+            {
+                if (IdemRuntime.Instance != null) IdemRuntime.Instance.LastInstrument = inst;
+                _engine.OnMasterFill(m, net, inst);
+            });
 
             var master = resolve(cfg.MasterAccount);
             if (master != null) _fills.Watch(master, true);
