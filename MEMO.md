@@ -5,7 +5,7 @@
 
 ## Status
 
-**Última sesión:** 2026-09-24 — ✅ **Fase 1 (núcleos puros) y Fase 2 (integración del copy) COMPLETAS Y VALIDADAS.** El copy replica en SIM (entrada/agregar/salida parcial/cierre + safety sweep + carrera de arranque), confirmado por el usuario. 24 tests puros en verde + F5 limpio.
+**Última sesión:** 2026-09-24 — ✅ **Fases 1-2 completas y validadas en SIM.** Copy replica bien (entrada/agregar/salida/cierre/sweep/carrera de arranque). **Fase 3 en curso:** núcleos puros hechos (`DayPnlCache`, `StopMirror` — 35 tests verdes); falta la cáscara NT8 (Tasks 3-4: poll de P&L + StopExecutor) que necesita F5/SIM. **Cambio de semántica del guard (pedido del usuario):** el RiskGuard es un **stop de pérdida diaria** — bloquea entradas nuevas cuando el P&L del día (realized+unrealized) llega a `-dailyLossLimit`, NO proximidad al drawdown. Config: `slave=cuenta,perdidaDiaria` (sin cushion). El código NT8 (CopyEngine/Idem.cs) cambió y **necesita re-F5**.
 
 ### Done
 - [x] **Fase 1 — núcleos puros** (`core\`, testeados con `dotnet test`): `Sizing` (1:1), `RiskGuard` (bloquea entradas cerca del DD, nunca salidas), `Reconciler` (delta con signo → Buy/Sell/None), `Types` (OrderAction/ReconcileOrder).
