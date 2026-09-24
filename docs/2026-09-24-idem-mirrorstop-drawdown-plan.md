@@ -24,128 +24,14 @@
 
 ### Task 1: `DayPnlCache` (puro) — YA EJECUTADA 2026-09-24
 
-**Files:**
-- Create: `bin\Custom\Idem\core\DayPnlCache.cs`
-- Test: `C:\dev\idem-tests\DayPnlCacheTests.cs`
+**Files:** `core/DayPnlCache.cs` + `tests/DayPnlCacheTests.cs`
 
-**Interfaces:**
-- Produces: `Idem.Core.DayPnlCache` con:
-  - `void Update(string account, double balance)` — actualiza el HWM (`hwm = max(hwm, balance)`) y guarda el último balance. Lo llama el poll del UI-thread.
-  - `double Drawdown(string account)` — `max(0, hwm - last)`; `0` si la cuenta es desconocida. Lo lee el guard (cualquier thread).
-
-- [ ] **Step 1: Escribir el test que falla**
-
-Crear `C:\dev\idem-tests\DayPnlCacheTests.cs`:
-
-```csharp
-using Idem.Core;
-using Xunit;
-
-public class DayPnlCacheTests
-{
-    [Fact]
-    public void Unknown_IsZero()
-    {
-        var t = new DayPnlCache();
-        Assert.Equal(0, t.Drawdown("A"));
-    }
-
-    [Fact]
-    public void AtPeak_DrawdownZero()
-    {
-        var t = new DayPnlCache();
-        t.Update("A", 50000);
-        Assert.Equal(0, t.Drawdown("A"));
-    }
-
-    [Fact]
-    public void BelowPeak_DrawdownIsGap()
-    {
-        var t = new DayPnlCache();
-        t.Update("A", 50000);   // pico
-        t.Update("A", 49100);   // −900
-        Assert.Equal(900, t.Drawdown("A"));
-    }
-
-    [Fact]
-    public void PeakTrailsUp_ThenMeasuresFromNewPeak()
-    {
-        var t = new DayPnlCache();
-        t.Update("A", 50000);
-        t.Update("A", 50800);   // nuevo pico
-        t.Update("A", 50300);   // −500 desde 50800
-        Assert.Equal(500, t.Drawdown("A"));
-    }
-
-    [Fact]
-    public void NeverNegative()
-    {
-        var t = new DayPnlCache();
-        t.Update("A", 50000);
-        t.Update("A", 51000);
-        Assert.Equal(0, t.Drawdown("A"));
-    }
-}
-```
-
-- [ ] **Step 2: Correr para verlo fallar**
-
-Run: `cd /c/dev/idem-tests && dotnet test --filter DayPnlCacheTests`
-Expected: FAIL — `DayPnlCache` no existe.
-
-- [ ] **Step 3: Implementar**
-
-Crear `bin\Custom\Idem\core\DayPnlCache.cs`:
-
-```csharp
-using System.Collections.Generic;
-
-namespace Idem.Core
-{
-    // Drawdown por cuenta = cuánto está por debajo de su pico de balance (net-liq).
-    // Update lo alimenta el poll del UI-thread (donde Account.Get funciona); Drawdown
-    // lo lee el guard desde cualquier thread. Conservador: nunca subestima el DD.
-    public sealed class DayPnlCache
-    {
-        private struct Row { public double Hwm; public double Last; public bool Seen; }
-        private readonly Dictionary<string, Row> _rows = new Dictionary<string, Row>();
-        private readonly object _lock = new object();
-
-        public void Update(string account, double balance)
-        {
-            lock (_lock)
-            {
-                _rows.TryGetValue(account, out var r);
-                if (!r.Seen || balance > r.Hwm) r.Hwm = balance;
-                r.Last = balance;
-                r.Seen = true;
-                _rows[account] = r;
-            }
-        }
-
-        public double Drawdown(string account)
-        {
-            lock (_lock)
-            {
-                if (!_rows.TryGetValue(account, out var r) || !r.Seen) return 0;
-                double dd = r.Hwm - r.Last;
-                return dd > 0 ? dd : 0;
-            }
-        }
-    }
-}
-```
-
-- [ ] **Step 4: Correr para verlo pasar**
-
-Run: `cd /c/dev/idem-tests && dotnet test`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd "/c/Users/santi/OneDrive/Documentos/NinjaTrader 8/bin/Custom/Idem" && git add core/DayPnlCache.cs && git commit -m "feat(core): DayPnlCache (DD por cuenta = HWM - balance actual)"
-```
+Cache del P&L del día (realized + unrealized) por cuenta. `Update(account, dayPnl)` lo
+alimenta el poll del UI-thread; `Get(account)` lo lee el guard desde cualquier thread.
+NT8 ya resetea `RealizedProfitLoss` por sesión, así que no hace falta trackear HWM ni resets.
+Implementado y en verde (3 tests). Firma final:
+- `void Update(string account, double dayPnl)`
+- `double Get(string account)` — 0 si desconocido.
 
 ---
 
