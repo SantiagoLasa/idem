@@ -3,10 +3,14 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Tools;
 using NinjaTrader.NinjaScript;
 using Idem.Core;
 using Idem.Nt;
+using Idem.Ui;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
@@ -17,6 +21,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     {
         private static readonly object _initLock = new object();
         private static bool _booted;
+        private NTMenuItem _menu;
 
         private PositionTracker _tracker;
         private DayPnlCache _dayCache;
@@ -40,13 +45,36 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         protected override void OnWindowCreated(Window window)
         {
-            lock (_initLock)
+            bool doBoot = false;
+            lock (_initLock) { if (!_booted) { _booted = true; doBoot = true; } }
+            if (doBoot)
             {
-                if (_booted) return;
-                _booted = true;
+                try { Boot(); }
+                catch (Exception ex) { Log("boot error: " + ex.Message); }
             }
-            try { Boot(); }
-            catch (Exception ex) { Log("boot error: " + ex.Message); }
+
+            try { AddMenu(window); }
+            catch (Exception ex) { Log("menu error: " + ex.Message); }
+        }
+
+        // Agrega "Idem → Dashboard" al menú New del Control Center. Idempotente: saca
+        // los ítems viejos de compilaciones previas antes de agregar (patrón PropCommand).
+        private void AddMenu(Window window)
+        {
+            var cc = window as ControlCenter;
+            if (cc == null) return;
+            var newMenu = cc.FindFirst("ControlCenterMenuItemNew") as ItemsControl;
+            if (newMenu == null) return;
+
+            foreach (var it in newMenu.Items.OfType<NTMenuItem>().Where(m => m.Header?.ToString() == "Idem").ToList())
+                newMenu.Items.Remove(it);
+
+            var root = new NTMenuItem { Header = "Idem", Style = Application.Current.TryFindResource("MainMenuItem") as Style };
+            var open = new NTMenuItem { Header = "Dashboard", Style = Application.Current.TryFindResource("SubMenuItem") as Style };
+            open.Click += (s, e) => IdemWindow.ShowOrActivate();
+            root.Items.Add(open);
+            newMenu.Items.Add(root);
+            _menu = root;
         }
 
         private void Boot()
