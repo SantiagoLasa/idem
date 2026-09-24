@@ -5,7 +5,13 @@
 
 ## Status
 
-**Última sesión:** 2026-09-24 — ✅ **Fases 1-2 completas y validadas en SIM.** Copy replica bien (entrada/agregar/salida/cierre/sweep/carrera de arranque). **Fase 3 en curso:** núcleos puros hechos (`DayPnlCache`, `StopMirror` — 35 tests verdes); falta la cáscara NT8 (Tasks 3-4: poll de P&L + StopExecutor) que necesita F5/SIM. **Cambio de semántica del guard (pedido del usuario):** el RiskGuard es un **stop de pérdida diaria** — bloquea entradas nuevas cuando el P&L del día (realized+unrealized) llega a `-dailyLossLimit`, NO proximidad al drawdown. Config: `slave=cuenta,perdidaDiaria` (sin cushion). El código NT8 (CopyEngine/Idem.cs) cambió y **necesita re-F5**.
+**Última sesión:** 2026-09-24 — ✅ **Fases 1, 2 y 3 COMPLETAS Y VALIDADAS EN SIM.** El copy de Idem está entero: réplica (reconciler-a-target + safety sweep) + **guard de pérdida diaria** + **stop de protección espejado**. Validado por el usuario: el guard bloquea entradas cuando el slave perdió su tope del día (nunca las salidas), y el mirror-stop actualiza precio y cantidad al instante siguiendo al master, se cancela al quedar flat. 35 tests puros en verde + F5 limpio + SIM ok.
+
+**Guard = stop de pérdida diaria** (no proximidad al drawdown): bloquea entradas nuevas cuando el P&L del día (realized+unrealized) llega a `-dailyLossLimit`. Config: `slave=cuenta,perdidaDiaria` (sin cushion). Para testear el stop hay que subir el tope alto (si no, el guard bloquea).
+
+### Next up
+- **Fase 4 — Dashboard WPF**: el panel que el usuario ya está pidiendo — setear master/slaves/topes + on/off desde UI (hoy sólo el `idem-config.txt`, se lee 1 vez al arrancar), flota en vivo, feed de réplicas, Flatten/Pausa.
+- **Fase 5 — Calendar** local.
 
 ### Done
 - [x] **Fase 1 — núcleos puros** (`core\`, testeados con `dotnet test`): `Sizing` (1:1), `RiskGuard` (bloquea entradas cerca del DD, nunca salidas), `Reconciler` (delta con signo → Buy/Sell/None), `Types` (OrderAction/ReconcileOrder).
