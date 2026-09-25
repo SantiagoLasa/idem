@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Threading;
 using NinjaTrader.Cbi;
@@ -23,6 +25,14 @@ namespace Idem.Ui
         private readonly TextBlock _cfgMsg = new TextBlock();
         private readonly Button _pauseBtn = new Button();
         private DispatcherTimer _timer;
+
+        // Guard de funding: un delta de net-liq mayor a esto es depósito/retiro, no P&L.
+        private const double FundingGuard = 1000000;
+        private readonly UniformGrid _calGrid = new UniformGrid { Columns = 7 };
+        private readonly TextBlock _calLabel = new TextBlock();
+        private readonly TextBlock _calTotal = new TextBlock();
+        private DateTime _calMonth;
+        private static readonly CultureInfo Es = new CultureInfo("es-ES");
 
         private static readonly Brush Green = new SolidColorBrush(Color.FromRgb(0x22, 0xc5, 0x5e));
         private static readonly Brush Red = new SolidColorBrush(Color.FromRgb(0xef, 0x44, 0x44));
@@ -72,6 +82,24 @@ namespace Idem.Ui
             root.Children.Add(_fleet);
             root.Children.Add(feedTitle);
             root.Children.Add(_feed);
+
+            var t0 = TradingDay.EtDate(DateTime.UtcNow);
+            _calMonth = new DateTime(t0.Year, t0.Month, 1);
+
+            var calTitle = new TextBlock { Text = "Calendario (P&L diario, corte 5pm ET)", Foreground = Dim, FontSize = 12, Margin = new Thickness(0, 18, 0, 4) };
+            var prevBtn = new Button { Content = "◀", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 0, 6, 0) };
+            var nextBtn = new Button { Content = "▶", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(6, 0, 0, 0) };
+            prevBtn.Click += (s, e) => { _calMonth = _calMonth.AddMonths(-1); RefreshCalendar(); };
+            nextBtn.Click += (s, e) => { _calMonth = _calMonth.AddMonths(1); RefreshCalendar(); };
+            _calLabel.Foreground = Brushes.White; _calLabel.FontSize = 13; _calLabel.VerticalAlignment = VerticalAlignment.Center;
+            _calLabel.MinWidth = 150; _calLabel.TextAlignment = TextAlignment.Center;
+            _calTotal.Foreground = Dim; _calTotal.FontSize = 12; _calTotal.VerticalAlignment = VerticalAlignment.Center; _calTotal.Margin = new Thickness(16, 0, 0, 0);
+            var calBar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+            calBar.Children.Add(prevBtn); calBar.Children.Add(_calLabel); calBar.Children.Add(nextBtn); calBar.Children.Add(_calTotal);
+
+            root.Children.Add(calTitle);
+            root.Children.Add(calBar);
+            root.Children.Add(_calGrid);
 
             var cfgTitle = new TextBlock { Text = "Config (editar y Guardar — sin reiniciar)", Foreground = Dim, FontSize = 12, Margin = new Thickness(0, 18, 0, 4) };
             _cfgBox.AcceptsReturn = true;
@@ -173,6 +201,90 @@ namespace Idem.Ui
             _feed.Children.Clear();
             foreach (var line in rt.RecentFeed())
                 _feed.Children.Add(new TextBlock { Text = line, Foreground = Dim, FontSize = 11, Margin = new Thickness(0, 1, 0, 1) });
+
+            RefreshCalendar();
+        }
+
+        private void RefreshCalendar()
+        {
+            var rt = IdemRuntime.Instance;
+            _calGrid.Children.Clear();
+
+            string[] wd = { "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom" };
+            foreach (var w in wd)
+                _calGrid.Children.Add(new TextBlock { Text = w, Foreground = Dim, FontSize = 11, TextAlignment = TextAlignment.Center, Margin = new Thickness(2) });
+
+            _calLabel.Text = _calMonth.ToString("MMMM yyyy", Es);
+
+            if (rt == null || rt.Calendar == null) { _calTotal.Text = ""; return; }
+
+            var totals = rt.Calendar.Totals(FundingGuard);
+            // Hoy en vivo: P&L de sesión (realized+unrealized) sumado sobre master+slaves.
+            // Anda desde el día uno (no necesita cierre previo, a diferencia del delta de net-liq).
+            var today = TradingDay.EtDate(DateTime.UtcNow);
+            totals[today] = LiveTodayPnl(rt);
+
+            int days = DateTime.DaysInMonth(_calMonth.Year, _calMonth.Month);
+            int lead = ((int)_calMonth.DayOfWeek + 6) % 7; // lunes = 0
+            for (int i = 0; i < lead; i++) _calGrid.Children.Add(new Border());
+
+            double maxAbs = 0;
+            for (int d = 1; d <= days; d++)
+            {
+                var date = new DateTime(_calMonth.Year, _calMonth.Month, d);
+                if (totals.TryGetValue(date, out double v)) maxAbs = Math.Max(maxAbs, Math.Abs(v));
+            }
+
+            double monthSum = 0;
+            for (int d = 1; d <= days; d++)
+            {
+                var date = new DateTime(_calMonth.Year, _calMonth.Month, d);
+                bool has = totals.TryGetValue(date, out double v);
+                if (has) monthSum += v;
+                _calGrid.Children.Add(DayCell(d, has ? (double?)v : null, maxAbs, date == today));
+            }
+
+            _calTotal.Text = "Mes: " + monthSum.ToString("+0;-0;0");
+            _calTotal.Foreground = monthSum > 0 ? Green : monthSum < 0 ? Red : Dim;
+        }
+
+        private static double LiveTodayPnl(IdemRuntime rt)
+        {
+            if (rt.Config == null || rt.DayCache == null) return 0;
+            double sum = 0;
+            if (rt.Resolve != null)
+            {
+                var m = rt.Resolve(rt.Config.MasterAccount);
+                if (m != null) sum += rt.DayCache.Get(m.Name);
+            }
+            foreach (var sc in rt.Config.Slaves) sum += rt.DayCache.Get(sc.Account);
+            return sum;
+        }
+
+        private UIElement DayCell(int day, double? pnl, double maxAbs, bool isToday)
+        {
+            var border = new Border
+            {
+                Margin = new Thickness(2), Padding = new Thickness(4), MinHeight = 44,
+                CornerRadius = new CornerRadius(3), Background = CellBrush(pnl, maxAbs)
+            };
+            if (isToday) { border.BorderBrush = Brushes.White; border.BorderThickness = new Thickness(1); }
+
+            var sp = new StackPanel();
+            sp.Children.Add(new TextBlock { Text = day.ToString(), Foreground = Dim, FontSize = 10 });
+            if (pnl.HasValue)
+                sp.Children.Add(new TextBlock { Text = pnl.Value.ToString("+0;-0;0"), Foreground = Brushes.White, FontSize = 12, FontWeight = FontWeights.SemiBold });
+            border.Child = sp;
+            return border;
+        }
+
+        private static Brush CellBrush(double? pnl, double maxAbs)
+        {
+            if (!pnl.HasValue || pnl.Value == 0) return new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x18));
+            byte a = (byte)(40 + 150 * Heatmap.Intensity(pnl.Value, maxAbs));
+            return Heatmap.Bucket(pnl.Value) == HeatLevel.Gain
+                ? new SolidColorBrush(Color.FromArgb(a, 0x22, 0xc5, 0x5e))
+                : new SolidColorBrush(Color.FromArgb(a, 0xef, 0x44, 0x44));
         }
 
         private void SaveConfig()

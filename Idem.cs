@@ -160,12 +160,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else Log("slave no encontrado: " + sc.Account);
             }
 
-            _dayPoll = new DayPnlPoll(_dayCache, slaveAccounts);
-            _dayPoll.Start();
-
             var allAccounts = new List<Account>();
             if (master != null) allAccounts.Add(master);
             allAccounts.AddRange(slaveAccounts);
+
+            // Poll de P&L del día sobre master+slaves: el guard sólo mira slaves, pero el
+            // master también hace falta para el total del día en el calendario (celda "hoy").
+            _dayPoll = new DayPnlPoll(_dayCache, allAccounts);
+            _dayPoll.Start();
+
             _calRecorder = new CalendarRecorder(_calendar, allAccounts, _calendarPath);
             _calRecorder.Start();
         }
