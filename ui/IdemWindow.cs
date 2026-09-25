@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -43,6 +44,29 @@ namespace Idem.Ui
             public TextBlock DayText;
             public Border BarFill;
         }
+
+        // Selector de cuentas: por cada cuenta disponible, radio (master) + check (slave).
+        private const double NewSlaveDefaultLimit = 1000;
+        private readonly StackPanel _acctHost = new StackPanel();
+        private readonly TextBlock _acctMsg = new TextBlock();
+        private readonly List<AccountRow> _acctRows = new List<AccountRow>();
+        private string _acctSig;
+
+        private sealed class AccountRow
+        {
+            public string Account;
+            public RadioButton MasterRb;
+            public CheckBox SlaveCb;
+        }
+
+        // Filtro de cuentas visibles (para ocultar cuentas quemadas del listado de NT8).
+        // Se persiste en idem-visible.txt (una cuenta por línea) para no rehacerlo cada sesión.
+        private readonly TextBlock _visGlyph = new TextBlock();
+        private readonly StackPanel _visPanel = new StackPanel();
+        private readonly ScrollViewer _visScroll = new ScrollViewer();
+        private HashSet<string> _visibleSet;
+        private string _visAvailSig;
+        private string _visiblePath;
 
         // Guard de funding: un delta de net-liq mayor a esto es depósito/retiro, no P&L.
         private const double FundingGuard = 1000000;
@@ -165,6 +189,46 @@ namespace Idem.Ui
                 Child = calInner
             };
             root.Children.Add(calCard);
+
+            // --- Selector de master y slaves ---
+            var acctHelp = new TextBlock
+            {
+                Text = "Elegí el master (uno) y las slaves (las que quieras). Los topes se ajustan abajo.",
+                Foreground = Muted, FontSize = 11, Margin = new Thickness(0, 0, 0, 12), TextWrapping = TextWrapping.Wrap
+            };
+            _visiblePath = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "bin", "Custom", "Idem", "idem-visible.txt");
+
+            // Desplegable "Cuentas visibles": tildá cuáles mostrar en la tabla de abajo.
+            _visGlyph.Text = "▸"; _visGlyph.Foreground = Accent; _visGlyph.FontSize = 12; _visGlyph.Margin = new Thickness(0, 0, 8, 0); _visGlyph.VerticalAlignment = VerticalAlignment.Center;
+            var visHeaderInner = new StackPanel { Orientation = Orientation.Horizontal };
+            visHeaderInner.Children.Add(_visGlyph);
+            visHeaderInner.Children.Add(new TextBlock { Text = "Cuentas visibles (elegí cuáles mostrar)", Foreground = Dim, FontSize = 12, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+            var visHeader = new Border
+            {
+                Background = CellEmpty, CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6, 10, 6),
+                BorderBrush = BorderCol, BorderThickness = new Thickness(1), Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 0, 0, 6), Child = visHeaderInner
+            };
+            visHeader.MouseLeftButtonUp += (s, e) => ToggleVisible();
+
+            _visScroll.MaxHeight = 180; _visScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            _visScroll.Visibility = Visibility.Collapsed; _visScroll.Margin = new Thickness(0, 0, 0, 10);
+            _visScroll.Content = _visPanel;
+
+            var acctApplyText = new TextBlock { Text = "Aplicar cuentas", Foreground = Green, FontSize = 13, FontWeight = FontWeights.SemiBold };
+            var acctApplyBtn = Btn(acctApplyText, () => ApplyAccounts());
+            acctApplyBtn.Margin = new Thickness(0, 12, 0, 0);
+            acctApplyBtn.HorizontalAlignment = HorizontalAlignment.Left;
+            _acctMsg.Foreground = Muted; _acctMsg.FontSize = 11; _acctMsg.Margin = new Thickness(0, 8, 0, 0); _acctMsg.TextWrapping = TextWrapping.Wrap;
+
+            var acctBody = new StackPanel();
+            acctBody.Children.Add(acctHelp);
+            acctBody.Children.Add(visHeader);
+            acctBody.Children.Add(_visScroll);
+            acctBody.Children.Add(_acctHost);
+            acctBody.Children.Add(acctApplyBtn);
+            acctBody.Children.Add(_acctMsg);
+            root.Children.Add(SectionCard("MASTER Y SLAVES  ·  ELEGIR CUENTAS", acctBody, new Thickness(0, 14, 0, 0)));
 
             // --- Editor amigable del tope de pérdida diaria ---
             var guardHelp = new TextBlock
@@ -304,8 +368,205 @@ namespace Idem.Ui
             foreach (var line in rt.RecentFeed())
                 _feed.Children.Add(new TextBlock { Text = line, Foreground = Dim, FontSize = 11, Margin = new Thickness(0, 1, 0, 1) });
 
+            RefreshAccounts(rt);
             RefreshGuard(rt);
             RefreshCalendar();
+        }
+
+        private static List<string> AvailableAccounts()
+        {
+            var list = new List<string>();
+            try
+            {
+                lock (Account.All)
+                    foreach (var a in Account.All)
+                        if (!list.Contains(a.Name)) list.Add(a.Name);
+            }
+            catch { }
+            list.Sort();
+            return list;
+        }
+
+        private void ToggleVisible()
+        {
+            bool show = _visScroll.Visibility != Visibility.Visible;
+            _visScroll.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            _visGlyph.Text = show ? "▾" : "▸";
+        }
+
+        private HashSet<string> LoadVisible()
+        {
+            try
+            {
+                if (!File.Exists(_visiblePath)) return null;
+                var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var raw in File.ReadAllLines(_visiblePath))
+                {
+                    var line = raw.Trim();
+                    if (line.Length > 0) set.Add(line);
+                }
+                return set;
+            }
+            catch { return null; }
+        }
+
+        private void SaveVisible()
+        {
+            try { File.WriteAllLines(_visiblePath, new List<string>(_visibleSet).ToArray()); }
+            catch { }
+        }
+
+        // Reconstruye el selector sólo cuando cambian las cuentas disponibles, el filtro de
+        // visibles o la elección aplicada (no en cada tick — si no, borraría lo que estás
+        // seleccionando). Sólo se muestran las cuentas visibles + las que ya están en la config.
+        private void RefreshAccounts(IdemRuntime rt)
+        {
+            var avail = AvailableAccounts();
+
+            // Primera vez sin archivo: arrancar mostrando todas las disponibles.
+            if (_visibleSet == null)
+            {
+                _visibleSet = LoadVisible();
+                if (_visibleSet == null) { _visibleSet = new HashSet<string>(avail, StringComparer.OrdinalIgnoreCase); SaveVisible(); }
+            }
+
+            var availSig = string.Join(",", avail.ToArray());
+            if (availSig != _visAvailSig) { RebuildVisiblePanel(avail); _visAvailSig = availSig; }
+
+            // Mostrar en la tabla: cuentas visibles + las que ya están en la config (para no
+            // perder de vista una slave/master aunque esté oculta o desconectada).
+            var all = new List<string>();
+            foreach (var name in avail) if (_visibleSet.Contains(name)) all.Add(name);
+            if (!string.IsNullOrEmpty(rt.Config.MasterAccount) && !ContainsCi(all, rt.Config.MasterAccount)) all.Add(rt.Config.MasterAccount);
+            foreach (var sc in rt.Config.Slaves) if (!ContainsCi(all, sc.Account)) all.Add(sc.Account);
+            all.Sort();
+
+            var sig = string.Join(",", all.ToArray()) + "|" + rt.Config.MasterAccount + "|";
+            foreach (var sc in rt.Config.Slaves) sig += sc.Account + ";";
+            if (sig != _acctSig) { RebuildAccounts(rt, all); _acctSig = sig; }
+        }
+
+        private void RebuildVisiblePanel(List<string> avail)
+        {
+            _visPanel.Children.Clear();
+            if (avail.Count == 0)
+            {
+                _visPanel.Children.Add(new TextBlock { Text = "Sin cuentas disponibles.", Foreground = Muted, FontSize = 12 });
+                return;
+            }
+
+            foreach (var name in avail)
+            {
+                var cb = new CheckBox
+                {
+                    Content = name, Foreground = Brushes.White, FontSize = 12,
+                    IsChecked = _visibleSet.Contains(name), Margin = new Thickness(0, 3, 0, 3)
+                };
+                var captured = name; // handlers después de fijar IsChecked → sin eventos espurios
+                cb.Checked += (s, e) => { _visibleSet.Add(captured); SaveVisible(); _acctSig = null; };
+                cb.Unchecked += (s, e) => { _visibleSet.Remove(captured); SaveVisible(); _acctSig = null; };
+                _visPanel.Children.Add(cb);
+            }
+        }
+
+        private void RebuildAccounts(IdemRuntime rt, List<string> all)
+        {
+            _acctHost.Children.Clear();
+            _acctRows.Clear();
+
+            if (all.Count == 0)
+            {
+                _acctHost.Children.Add(new TextBlock { Text = "Sin cuentas disponibles (¿conectado?).", Foreground = Muted, FontSize = 12 });
+                return;
+            }
+
+            var head = AccountGrid();
+            head.Margin = new Thickness(0, 0, 0, 8);
+            head.Children.Add(Col(0, HeaderLabel("CUENTA", HorizontalAlignment.Left)));
+            head.Children.Add(Col(1, HeaderLabel("MASTER", HorizontalAlignment.Center)));
+            head.Children.Add(Col(2, HeaderLabel("SLAVE", HorizontalAlignment.Center)));
+            _acctHost.Children.Add(head);
+
+            foreach (var name in all)
+            {
+                var g = AccountGrid();
+                g.Margin = new Thickness(0, 4, 0, 4);
+                g.Children.Add(Col(0, new TextBlock { Text = name, Foreground = Brushes.White, FontSize = 13, VerticalAlignment = VerticalAlignment.Center }));
+
+                var rb = new RadioButton
+                {
+                    GroupName = "idem_master", Foreground = Brushes.White,
+                    IsChecked = string.Equals(name, rt.Config.MasterAccount, StringComparison.OrdinalIgnoreCase),
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+                };
+                g.Children.Add(Col(1, rb));
+
+                var cb = new CheckBox
+                {
+                    Foreground = Brushes.White,
+                    IsChecked = SlaveContains(rt.Config, name),
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+                };
+                g.Children.Add(Col(2, cb));
+
+                _acctHost.Children.Add(g);
+                _acctRows.Add(new AccountRow { Account = name, MasterRb = rb, SlaveCb = cb });
+            }
+        }
+
+        private void ApplyAccounts()
+        {
+            var rt = IdemRuntime.Instance;
+            if (rt == null || rt.Config == null || rt.Reconfigure == null) { _acctMsg.Text = "✗ motor no arrancado"; _acctMsg.Foreground = Red; return; }
+
+            string master = null;
+            foreach (var ar in _acctRows)
+                if (ar.MasterRb.IsChecked == true) { master = ar.Account; break; }
+
+            if (master == null) { _acctMsg.Text = "✗ elegí un master"; _acctMsg.Foreground = Red; return; }
+
+            var cfg = new IdemConfig { MasterAccount = master, Enabled = rt.Config.Enabled };
+            foreach (var ar in _acctRows)
+            {
+                if (ar.SlaveCb.IsChecked != true) continue;
+                if (string.Equals(ar.Account, master, StringComparison.OrdinalIgnoreCase)) continue; // no puede ser master y slave
+                cfg.Slaves.Add(new SlaveConfig { Account = ar.Account, DailyLossLimit = ExistingLimit(rt.Config, ar.Account) });
+            }
+
+            rt.Reconfigure(cfg);
+            _cfgBox.Text = IdemConfigWriter.ToText(cfg);
+            _acctMsg.Text = "✓ master " + master + " · " + cfg.Slaves.Count + " slaves (ajustá los topes abajo)";
+            _acctMsg.Foreground = Green;
+        }
+
+        private static double ExistingLimit(IdemConfig cfg, string account)
+        {
+            foreach (var sc in cfg.Slaves)
+                if (string.Equals(sc.Account, account, StringComparison.OrdinalIgnoreCase)) return sc.DailyLossLimit;
+            return NewSlaveDefaultLimit;
+        }
+
+        private static bool SlaveContains(IdemConfig cfg, string account)
+        {
+            foreach (var sc in cfg.Slaves)
+                if (string.Equals(sc.Account, account, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        private static bool ContainsCi(List<string> list, string val)
+        {
+            foreach (var s in list)
+                if (string.Equals(s, val, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        private static Grid AccountGrid()
+        {
+            var g = new Grid();
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+            return g;
         }
 
         // Reconstruye las filas del guard sólo cuando cambia el conjunto de slaves o sus
