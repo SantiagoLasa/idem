@@ -24,8 +24,6 @@ namespace Idem.Ui
         private readonly StackPanel _feed = new StackPanel();
         private readonly TextBlock _status = new TextBlock();
         private readonly Border _statusPill = new Border();
-        private readonly TextBox _cfgBox = new TextBox();
-        private readonly TextBlock _cfgMsg = new TextBlock();
         private readonly TextBlock _pauseText = new TextBlock();
         private DispatcherTimer _timer;
 
@@ -248,39 +246,6 @@ namespace Idem.Ui
             guardBody.Children.Add(guardApplyBtn);
             guardBody.Children.Add(_guardMsg);
             root.Children.Add(SectionCard("GUARD  ·  TOPE DE PÉRDIDA DIARIA POR SLAVE", guardBody, new Thickness(0, 14, 0, 0)));
-
-            var cfgHelp = new TextBlock
-            {
-                Text = "master=Cuenta   ·   slave=Cuenta,PérdidaDiaria   ·   enabled=true/false   —  se aplica sin reiniciar",
-                Foreground = Muted, FontSize = 11, Margin = new Thickness(0, 0, 0, 8), TextWrapping = TextWrapping.Wrap
-            };
-            _cfgBox.AcceptsReturn = true;
-            _cfgBox.MinLines = 5;
-            _cfgBox.FontFamily = new FontFamily("Consolas");
-            _cfgBox.FontSize = 13;
-            _cfgBox.Background = new SolidColorBrush(Color.FromRgb(0x0d, 0x0d, 0x14));
-            _cfgBox.Foreground = Brushes.White;
-            _cfgBox.CaretBrush = Accent;
-            _cfgBox.BorderBrush = BorderCol;
-            _cfgBox.BorderThickness = new Thickness(1);
-            _cfgBox.Padding = new Thickness(10);
-            var rt0 = IdemRuntime.Instance;
-            if (rt0 != null && rt0.Config != null) _cfgBox.Text = IdemConfigWriter.ToText(rt0.Config);
-
-            var saveText = new TextBlock { Text = "Guardar", Foreground = Green, FontSize = 13, FontWeight = FontWeights.SemiBold };
-            var saveBtn = Btn(saveText, () => SaveConfig());
-            saveBtn.Margin = new Thickness(0, 10, 0, 0);
-            saveBtn.HorizontalAlignment = HorizontalAlignment.Left;
-
-            _cfgMsg.Foreground = Muted; _cfgMsg.FontSize = 11; _cfgMsg.Margin = new Thickness(0, 8, 0, 0); _cfgMsg.TextWrapping = TextWrapping.Wrap;
-
-            var cfgBody = new StackPanel();
-            cfgBody.Children.Add(cfgHelp);
-            cfgBody.Children.Add(_cfgBox);
-            cfgBody.Children.Add(saveBtn);
-            cfgBody.Children.Add(_cfgMsg);
-
-            root.Children.Add(SectionCard("CONFIGURACIÓN AVANZADA  ·  MASTER · SLAVES · ENABLED", cfgBody, new Thickness(0, 14, 0, 0)));
 
             Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
 
@@ -534,7 +499,6 @@ namespace Idem.Ui
             }
 
             rt.Reconfigure(cfg);
-            _cfgBox.Text = IdemConfigWriter.ToText(cfg);
             _acctMsg.Text = "✓ master " + master + " · " + cfg.Slaves.Count + " slaves (ajustá los topes abajo)";
             _acctMsg.Foreground = Green;
         }
@@ -654,7 +618,6 @@ namespace Idem.Ui
             }
 
             rt.Reconfigure(cfg);
-            _cfgBox.Text = IdemConfigWriter.ToText(cfg); // mantener la config cruda en sync
             _guardMsg.Text = "✓ topes aplicados (" + cfg.Slaves.Count + " slaves)";
             _guardMsg.Foreground = Green;
         }
@@ -800,21 +763,6 @@ namespace Idem.Ui
             Color top = Color.FromArgb(a,
                 (byte)Math.Min(255, c.R + 22), (byte)Math.Min(255, c.G + 22), (byte)Math.Min(255, c.B + 22));
             return new LinearGradientBrush(top, c, 90);
-        }
-
-        private void SaveConfig()
-        {
-            var rt = IdemRuntime.Instance;
-            if (rt == null || rt.Reconfigure == null) { _cfgMsg.Text = "✗ motor no arrancado"; _cfgMsg.Foreground = Red; return; }
-            try
-            {
-                var cfg = IdemConfig.Parse(_cfgBox.Text);
-                if (string.IsNullOrWhiteSpace(cfg.MasterAccount)) { _cfgMsg.Text = "✗ falta master="; _cfgMsg.Foreground = Red; return; }
-                rt.Reconfigure(cfg);
-                _cfgMsg.Text = "✓ guardado y aplicado (" + cfg.Slaves.Count + " slaves)";
-                _cfgMsg.Foreground = Green;
-            }
-            catch (Exception ex) { _cfgMsg.Text = "✗ error: " + ex.Message; _cfgMsg.Foreground = Red; }
         }
 
         private UIElement RowUi(FleetRow r)
