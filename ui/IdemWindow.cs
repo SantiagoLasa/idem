@@ -28,6 +28,22 @@ namespace Idem.Ui
         private readonly TextBlock _pauseText = new TextBlock();
         private DispatcherTimer _timer;
 
+        // Editor del tope de pérdida diaria por slave (barra en vivo + campo editable).
+        private const double GuardBarWidth = 150;
+        private readonly StackPanel _guardHost = new StackPanel();
+        private readonly TextBlock _guardMsg = new TextBlock();
+        private readonly List<GuardRow> _guardRows = new List<GuardRow>();
+        private string _guardSig;
+
+        private sealed class GuardRow
+        {
+            public string Account;
+            public double LimitValue;
+            public TextBox LimitBox;
+            public TextBlock DayText;
+            public Border BarFill;
+        }
+
         // Guard de funding: un delta de net-liq mayor a esto es depósito/retiro, no P&L.
         private const double FundingGuard = 1000000;
         private readonly UniformGrid _calGrid = new UniformGrid { Columns = 7 };
@@ -150,6 +166,25 @@ namespace Idem.Ui
             };
             root.Children.Add(calCard);
 
+            // --- Editor amigable del tope de pérdida diaria ---
+            var guardHelp = new TextBlock
+            {
+                Text = "Frena entradas nuevas cuando el P&L del día (realized+unrealized) toca −tope. Las salidas nunca se bloquean.",
+                Foreground = Muted, FontSize = 11, Margin = new Thickness(0, 0, 0, 12), TextWrapping = TextWrapping.Wrap
+            };
+            var guardApplyText = new TextBlock { Text = "Aplicar topes", Foreground = Green, FontSize = 13, FontWeight = FontWeights.SemiBold };
+            var guardApplyBtn = Btn(guardApplyText, () => ApplyGuards());
+            guardApplyBtn.Margin = new Thickness(0, 12, 0, 0);
+            guardApplyBtn.HorizontalAlignment = HorizontalAlignment.Left;
+            _guardMsg.Foreground = Muted; _guardMsg.FontSize = 11; _guardMsg.Margin = new Thickness(0, 8, 0, 0); _guardMsg.TextWrapping = TextWrapping.Wrap;
+
+            var guardBody = new StackPanel();
+            guardBody.Children.Add(guardHelp);
+            guardBody.Children.Add(_guardHost);
+            guardBody.Children.Add(guardApplyBtn);
+            guardBody.Children.Add(_guardMsg);
+            root.Children.Add(SectionCard("GUARD  ·  TOPE DE PÉRDIDA DIARIA POR SLAVE", guardBody, new Thickness(0, 14, 0, 0)));
+
             var cfgHelp = new TextBlock
             {
                 Text = "master=Cuenta   ·   slave=Cuenta,PérdidaDiaria   ·   enabled=true/false   —  se aplica sin reiniciar",
@@ -181,7 +216,7 @@ namespace Idem.Ui
             cfgBody.Children.Add(saveBtn);
             cfgBody.Children.Add(_cfgMsg);
 
-            root.Children.Add(SectionCard("CONFIGURACIÓN  ·  MASTER · SLAVES · GUARD DE PÉRDIDA DIARIA", cfgBody, new Thickness(0, 14, 0, 0)));
+            root.Children.Add(SectionCard("CONFIGURACIÓN AVANZADA  ·  MASTER · SLAVES · ENABLED", cfgBody, new Thickness(0, 14, 0, 0)));
 
             Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
 
@@ -269,7 +304,107 @@ namespace Idem.Ui
             foreach (var line in rt.RecentFeed())
                 _feed.Children.Add(new TextBlock { Text = line, Foreground = Dim, FontSize = 11, Margin = new Thickness(0, 1, 0, 1) });
 
+            RefreshGuard(rt);
             RefreshCalendar();
+        }
+
+        // Reconstruye las filas del guard sólo cuando cambia el conjunto de slaves o sus
+        // topes aplicados (no en cada tick — si no, borraría lo que estás tipeando). La
+        // firma usa rt.Config, que sólo cambia al Reconfigure, nunca al escribir en el campo.
+        private void RefreshGuard(IdemRuntime rt)
+        {
+            var sig = rt.Config.MasterAccount + "|";
+            foreach (var sc in rt.Config.Slaves) sig += sc.Account + "=" + sc.DailyLossLimit + ";";
+            if (sig != _guardSig) { RebuildGuard(rt); _guardSig = sig; }
+
+            foreach (var gr in _guardRows)
+            {
+                double dayPnl = rt.DayCache.Get(gr.Account);
+                double loss = dayPnl < 0 ? -dayPnl : 0;
+                double frac = gr.LimitValue > 0 ? Math.Min(1, loss / gr.LimitValue) : 0;
+                bool blocked = gr.LimitValue > 0 && dayPnl <= -gr.LimitValue;
+
+                gr.BarFill.Width = frac * GuardBarWidth;
+                gr.BarFill.Background = blocked ? Red : frac >= 0.7 ? Warn : Green;
+                gr.DayText.Text = FormatMoney(dayPnl) + "  /  tope " + gr.LimitValue.ToString("$#,0", Es);
+                gr.DayText.Foreground = blocked ? Red : frac >= 0.7 ? Warn : Dim;
+            }
+        }
+
+        private void RebuildGuard(IdemRuntime rt)
+        {
+            _guardHost.Children.Clear();
+            _guardRows.Clear();
+
+            if (rt.Config.Slaves.Count == 0)
+            {
+                _guardHost.Children.Add(new TextBlock { Text = "Sin slaves configurados.", Foreground = Muted, FontSize = 12 });
+                return;
+            }
+
+            foreach (var sc in rt.Config.Slaves)
+            {
+                var g = GuardGrid();
+                g.Margin = new Thickness(0, 5, 0, 5);
+
+                g.Children.Add(Col(0, new TextBlock { Text = sc.Account, Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center }));
+
+                var box = new TextBox
+                {
+                    Text = sc.DailyLossLimit.ToString("0.##", CultureInfo.InvariantCulture),
+                    Width = 80, FontSize = 13, TextAlignment = TextAlignment.Right,
+                    Background = new SolidColorBrush(Color.FromRgb(0x0d, 0x0d, 0x14)), Foreground = Brushes.White,
+                    CaretBrush = Accent, BorderBrush = BorderCol, BorderThickness = new Thickness(1),
+                    Padding = new Thickness(6, 3, 6, 3), VerticalAlignment = VerticalAlignment.Center
+                };
+                var boxWrap = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                boxWrap.Children.Add(new TextBlock { Text = "$", Foreground = Muted, FontSize = 13, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+                boxWrap.Children.Add(box);
+                g.Children.Add(Col(1, boxWrap));
+
+                var track = new Border { Width = GuardBarWidth, Height = 8, CornerRadius = new CornerRadius(4), Background = CellEmpty, VerticalAlignment = VerticalAlignment.Center };
+                var fill = new Border { Width = 0, Height = 8, CornerRadius = new CornerRadius(4), Background = Green, HorizontalAlignment = HorizontalAlignment.Left };
+                track.Child = fill;
+                var dayText = new TextBlock { Foreground = Dim, FontSize = 12, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+                var prog = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                prog.Children.Add(track);
+                prog.Children.Add(dayText);
+                g.Children.Add(Col(2, prog));
+
+                _guardHost.Children.Add(g);
+                _guardRows.Add(new GuardRow { Account = sc.Account, LimitValue = sc.DailyLossLimit, LimitBox = box, DayText = dayText, BarFill = fill });
+            }
+        }
+
+        private void ApplyGuards()
+        {
+            var rt = IdemRuntime.Instance;
+            if (rt == null || rt.Config == null || rt.Reconfigure == null) { _guardMsg.Text = "✗ motor no arrancado"; _guardMsg.Foreground = Red; return; }
+
+            var cfg = new IdemConfig { MasterAccount = rt.Config.MasterAccount, Enabled = rt.Config.Enabled };
+            foreach (var gr in _guardRows)
+            {
+                var raw = gr.LimitBox.Text.Trim().Replace("$", "");
+                if (!double.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out double lim) || lim < 0)
+                {
+                    _guardMsg.Text = "✗ tope inválido en " + gr.Account; _guardMsg.Foreground = Red; return;
+                }
+                cfg.Slaves.Add(new SlaveConfig { Account = gr.Account, DailyLossLimit = lim });
+            }
+
+            rt.Reconfigure(cfg);
+            _cfgBox.Text = IdemConfigWriter.ToText(cfg); // mantener la config cruda en sync
+            _guardMsg.Text = "✓ topes aplicados (" + cfg.Slaves.Count + " slaves)";
+            _guardMsg.Foreground = Green;
+        }
+
+        private static Grid GuardGrid()
+        {
+            var g = new Grid();
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(320) });
+            return g;
         }
 
         private void RefreshCalendar()
