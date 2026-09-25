@@ -22,9 +22,10 @@ namespace Idem.Ui
         private readonly StackPanel _fleet = new StackPanel();
         private readonly StackPanel _feed = new StackPanel();
         private readonly TextBlock _status = new TextBlock();
+        private readonly Border _statusPill = new Border();
         private readonly TextBox _cfgBox = new TextBox();
         private readonly TextBlock _cfgMsg = new TextBlock();
-        private readonly Button _pauseBtn = new Button();
+        private readonly TextBlock _pauseText = new TextBlock();
         private DispatcherTimer _timer;
 
         // Guard de funding: un delta de net-liq mayor a esto es depósito/retiro, no P&L.
@@ -64,32 +65,43 @@ namespace Idem.Ui
             Width = 760; Height = 640;
             Background = new SolidColorBrush(Color.FromRgb(0x0a, 0x0a, 0x0f));
 
-            _status.Foreground = Brushes.White;
-            _status.FontSize = 14;
-            _status.VerticalAlignment = VerticalAlignment.Center;
-            _status.Margin = new Thickness(0, 0, 16, 0);
+            // --- Barra superior: marca + pill de estado + controles ---
+            var brand = new TextBlock { Text = "IDEM", Foreground = Brushes.White, FontSize = 20, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
+            _status.FontSize = 12; _status.FontWeight = FontWeights.SemiBold; _status.VerticalAlignment = VerticalAlignment.Center;
+            _statusPill.CornerRadius = new CornerRadius(12); _statusPill.Padding = new Thickness(11, 3, 11, 3);
+            _statusPill.Margin = new Thickness(12, 0, 0, 0); _statusPill.VerticalAlignment = VerticalAlignment.Center; _statusPill.Child = _status;
 
-            _pauseBtn.Content = "Pausa";
-            _pauseBtn.Padding = new Thickness(12, 3, 12, 3);
-            _pauseBtn.Margin = new Thickness(0, 0, 8, 0);
-            _pauseBtn.Click += (s, e) => TogglePause();
+            var headerLeft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            headerLeft.Children.Add(brand);
+            headerLeft.Children.Add(_statusPill);
 
-            var flattenBtn = new Button { Content = "FLATTEN ALL", Padding = new Thickness(12, 3, 12, 3) };
-            flattenBtn.Foreground = Red;
-            flattenBtn.Click += (s, e) => FlattenAll();
+            _pauseText.Text = "Pausa"; _pauseText.Foreground = Brushes.White; _pauseText.FontSize = 13; _pauseText.FontWeight = FontWeights.SemiBold;
+            var flatText = new TextBlock { Text = "FLATTEN ALL", Foreground = Red, FontSize = 13, FontWeight = FontWeights.Bold };
 
-            var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
-            bar.Children.Add(_status);
-            bar.Children.Add(_pauseBtn);
-            bar.Children.Add(flattenBtn);
+            var headerRight = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            headerRight.Children.Add(Btn(_pauseText, () => TogglePause()));
+            headerRight.Children.Add(Btn(flatText, () => FlattenAll()));
 
-            var feedTitle = new TextBlock { Text = "Réplicas", Foreground = Dim, FontSize = 12, Margin = new Thickness(0, 14, 0, 4) };
+            var header = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
+            DockPanel.SetDock(headerRight, Dock.Right);
+            header.Children.Add(headerRight);
+            header.Children.Add(headerLeft);
 
-            var root = new StackPanel { Margin = new Thickness(14) };
-            root.Children.Add(bar);
-            root.Children.Add(_fleet);
-            root.Children.Add(feedTitle);
-            root.Children.Add(_feed);
+            // --- Flota: encabezado de columnas + filas ---
+            var fleetHead = FleetGrid();
+            fleetHead.Margin = new Thickness(0, 0, 0, 8);
+            fleetHead.Children.Add(Col(0, HeaderLabel("CUENTA", HorizontalAlignment.Left)));
+            fleetHead.Children.Add(Col(1, HeaderLabel("NET", HorizontalAlignment.Right)));
+            fleetHead.Children.Add(Col(2, HeaderLabel("P&L DÍA", HorizontalAlignment.Right)));
+            fleetHead.Children.Add(Col(3, HeaderLabel("ESTADO", HorizontalAlignment.Right)));
+            var fleetBody = new StackPanel();
+            fleetBody.Children.Add(fleetHead);
+            fleetBody.Children.Add(_fleet);
+
+            var root = new StackPanel { Margin = new Thickness(16) };
+            root.Children.Add(header);
+            root.Children.Add(SectionCard("FLOTA", fleetBody, new Thickness(0, 0, 0, 0)));
+            root.Children.Add(SectionCard("RÉPLICAS", _feed, new Thickness(0, 14, 0, 0)));
 
             var t0 = TradingDay.EtDate(DateTime.UtcNow);
             _calMonth = new DateTime(t0.Year, t0.Month, 1);
@@ -133,29 +145,43 @@ namespace Idem.Ui
             var calCard = new Border
             {
                 Background = CardBg, CornerRadius = new CornerRadius(10), Padding = new Thickness(16),
-                BorderBrush = BorderCol, BorderThickness = new Thickness(1), Margin = new Thickness(0, 18, 0, 0),
+                BorderBrush = BorderCol, BorderThickness = new Thickness(1), Margin = new Thickness(0, 14, 0, 0),
                 Child = calInner
             };
             root.Children.Add(calCard);
 
-            var cfgTitle = new TextBlock { Text = "Config (editar y Guardar — sin reiniciar)", Foreground = Dim, FontSize = 12, Margin = new Thickness(0, 18, 0, 4) };
+            var cfgHelp = new TextBlock
+            {
+                Text = "master=Cuenta   ·   slave=Cuenta,PérdidaDiaria   ·   enabled=true/false   —  se aplica sin reiniciar",
+                Foreground = Muted, FontSize = 11, Margin = new Thickness(0, 0, 0, 8), TextWrapping = TextWrapping.Wrap
+            };
             _cfgBox.AcceptsReturn = true;
             _cfgBox.MinLines = 5;
             _cfgBox.FontFamily = new FontFamily("Consolas");
-            _cfgBox.Background = new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x18));
+            _cfgBox.FontSize = 13;
+            _cfgBox.Background = new SolidColorBrush(Color.FromRgb(0x0d, 0x0d, 0x14));
             _cfgBox.Foreground = Brushes.White;
-            _cfgBox.BorderBrush = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x2e));
-            _cfgBox.Padding = new Thickness(6);
+            _cfgBox.CaretBrush = Accent;
+            _cfgBox.BorderBrush = BorderCol;
+            _cfgBox.BorderThickness = new Thickness(1);
+            _cfgBox.Padding = new Thickness(10);
             var rt0 = IdemRuntime.Instance;
             if (rt0 != null && rt0.Config != null) _cfgBox.Text = IdemConfigWriter.ToText(rt0.Config);
-            var saveBtn = new Button { Content = "Guardar config", Padding = new Thickness(12, 3, 12, 3), Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
-            saveBtn.Click += (s, e) => SaveConfig();
-            _cfgMsg.Foreground = Dim; _cfgMsg.FontSize = 11; _cfgMsg.Margin = new Thickness(0, 4, 0, 0);
 
-            root.Children.Add(cfgTitle);
-            root.Children.Add(_cfgBox);
-            root.Children.Add(saveBtn);
-            root.Children.Add(_cfgMsg);
+            var saveText = new TextBlock { Text = "Guardar", Foreground = Green, FontSize = 13, FontWeight = FontWeights.SemiBold };
+            var saveBtn = Btn(saveText, () => SaveConfig());
+            saveBtn.Margin = new Thickness(0, 10, 0, 0);
+            saveBtn.HorizontalAlignment = HorizontalAlignment.Left;
+
+            _cfgMsg.Foreground = Muted; _cfgMsg.FontSize = 11; _cfgMsg.Margin = new Thickness(0, 8, 0, 0); _cfgMsg.TextWrapping = TextWrapping.Wrap;
+
+            var cfgBody = new StackPanel();
+            cfgBody.Children.Add(cfgHelp);
+            cfgBody.Children.Add(_cfgBox);
+            cfgBody.Children.Add(saveBtn);
+            cfgBody.Children.Add(_cfgMsg);
+
+            root.Children.Add(SectionCard("CONFIGURACIÓN  ·  MASTER · SLAVES · GUARD DE PÉRDIDA DIARIA", cfgBody, new Thickness(0, 14, 0, 0)));
 
             Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
 
@@ -203,14 +229,18 @@ namespace Idem.Ui
 
             if (rt == null || rt.Config == null)
             {
-                _status.Text = "motor no arrancado";
+                _status.Text = "○ SIN MOTOR"; _status.Foreground = Muted;
+                _statusPill.Background = CellEmpty;
                 return;
             }
 
             bool on = rt.Config.Enabled;
-            _status.Text = "Replicación: " + (on ? "ON" : "OFF");
+            _status.Text = on ? "● ACTIVO" : "● PAUSADO";
             _status.Foreground = on ? Green : Warn;
-            _pauseBtn.Content = on ? "Pausa" : "Reanudar";
+            _statusPill.Background = on
+                ? new SolidColorBrush(Color.FromArgb(0x33, 0x22, 0xc5, 0x5e))
+                : new SolidColorBrush(Color.FromArgb(0x33, 0xea, 0xb3, 0x08));
+            _pauseText.Text = on ? "Pausa" : "Reanudar";
 
             var inst = rt.LastInstrument;
             string instName = inst != null ? inst.FullName : "";
@@ -379,31 +409,101 @@ namespace Idem.Ui
         private void SaveConfig()
         {
             var rt = IdemRuntime.Instance;
-            if (rt == null || rt.Reconfigure == null) { _cfgMsg.Text = "motor no arrancado"; return; }
+            if (rt == null || rt.Reconfigure == null) { _cfgMsg.Text = "✗ motor no arrancado"; _cfgMsg.Foreground = Red; return; }
             try
             {
                 var cfg = IdemConfig.Parse(_cfgBox.Text);
-                if (string.IsNullOrWhiteSpace(cfg.MasterAccount)) { _cfgMsg.Text = "falta master="; return; }
+                if (string.IsNullOrWhiteSpace(cfg.MasterAccount)) { _cfgMsg.Text = "✗ falta master="; _cfgMsg.Foreground = Red; return; }
                 rt.Reconfigure(cfg);
-                _cfgMsg.Text = "guardado y aplicado (" + cfg.Slaves.Count + " slaves)";
+                _cfgMsg.Text = "✓ guardado y aplicado (" + cfg.Slaves.Count + " slaves)";
+                _cfgMsg.Foreground = Green;
             }
-            catch (Exception ex) { _cfgMsg.Text = "error: " + ex.Message; }
+            catch (Exception ex) { _cfgMsg.Text = "✗ error: " + ex.Message; _cfgMsg.Foreground = Red; }
         }
 
         private UIElement RowUi(FleetRow r)
         {
-            var tb = new TextBlock
+            var g = FleetGrid();
+
+            var acct = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            if (r.IsMaster)
+                acct.Children.Add(new TextBlock { Text = "★", Foreground = Accent, FontSize = 12, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center });
+            acct.Children.Add(new TextBlock { Text = r.Account, Foreground = Brushes.White, FontSize = 13, FontWeight = r.IsMaster ? FontWeights.Bold : FontWeights.Normal, VerticalAlignment = VerticalAlignment.Center });
+            g.Children.Add(Col(0, acct));
+
+            g.Children.Add(Col(1, new TextBlock { Text = r.Net.ToString(), Foreground = Dim, FontSize = 13, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center }));
+
+            var pnlBrush = r.DayPnl > 0 ? Green : r.DayPnl < 0 ? Red : Dim;
+            g.Children.Add(Col(2, new TextBlock { Text = FormatMoney(r.DayPnl), Foreground = pnlBrush, FontSize = 13, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center }));
+
+            if (r.GuardBlocking)
+                g.Children.Add(Col(3, WarnPill("BLOQUEADO")));
+
+            return new Border
             {
-                Margin = new Thickness(0, 4, 0, 4), FontSize = 13, Foreground = Brushes.White,
-                Text = (r.IsMaster ? "★ " : "    ") + r.Account
-                     + "    net " + r.Net
-                     + "    día " + r.DayPnl.ToString("+0;-0;0")
-                     + (r.GuardBlocking ? "    ⚠ BLOQUEADO" : "")
+                BorderBrush = BorderCol, BorderThickness = new Thickness(0, 0, 0, 1),
+                Padding = new Thickness(0, 7, 0, 7), Child = g
             };
-            if (r.GuardBlocking) tb.Foreground = Warn;
-            else if (r.DayPnl > 0) tb.Foreground = Green;
-            else if (r.DayPnl < 0) tb.Foreground = Red;
-            return tb;
+        }
+
+        // --- Helpers de estilo compartidos ---
+
+        private Border Btn(TextBlock label, Action onClick)
+        {
+            var b = new Border
+            {
+                Background = CellEmpty, CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 6, 14, 6),
+                Margin = new Thickness(0, 0, 8, 0), BorderBrush = BorderCol, BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand, Child = label
+            };
+            b.MouseEnter += (s, e) => b.Background = NavHover;
+            b.MouseLeave += (s, e) => b.Background = CellEmpty;
+            b.MouseLeftButtonUp += (s, e) => onClick();
+            return b;
+        }
+
+        private static Border SectionCard(string caption, UIElement body, Thickness margin)
+        {
+            var inner = new StackPanel();
+            inner.Children.Add(new TextBlock { Text = caption, Foreground = Muted, FontSize = 10, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 10) });
+            inner.Children.Add(body);
+            return new Border
+            {
+                Background = CardBg, CornerRadius = new CornerRadius(10), Padding = new Thickness(16),
+                BorderBrush = BorderCol, BorderThickness = new Thickness(1), Margin = margin, Child = inner
+            };
+        }
+
+        private static Grid FleetGrid()
+        {
+            var g = new Grid();
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+            return g;
+        }
+
+        private static FrameworkElement Col(int c, FrameworkElement el)
+        {
+            Grid.SetColumn(el, c);
+            return el;
+        }
+
+        private static TextBlock HeaderLabel(string text, HorizontalAlignment align)
+        {
+            return new TextBlock { Text = text, Foreground = Muted, FontSize = 10, FontWeight = FontWeights.SemiBold, HorizontalAlignment = align };
+        }
+
+        private static Border WarnPill(string text)
+        {
+            return new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(0x33, 0xea, 0xb3, 0x08)),
+                CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 2, 8, 2),
+                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock { Text = "⚠ " + text, Foreground = Warn, FontSize = 11, FontWeight = FontWeights.SemiBold }
+            };
         }
     }
 }
