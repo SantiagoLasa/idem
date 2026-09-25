@@ -12,6 +12,7 @@ namespace Idem.Nt
 
         public PositionTracker Tracker;
         public DayPnlCache DayCache;
+        public CalendarStore Calendar;
         public IdemConfig Config;
         public System.Func<string, Account> Resolve;
         public System.Action<IdemConfig> Reconfigure;

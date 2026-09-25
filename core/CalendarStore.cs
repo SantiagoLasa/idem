@@ -45,6 +45,15 @@ namespace Idem.Core
             return total;
         }
 
+        public List<NetLiqSnapshot> Snapshots()
+        {
+            var list = new List<NetLiqSnapshot>();
+            foreach (var acct in _byAccount)
+                foreach (var kv in acct.Value)
+                    list.Add(new NetLiqSnapshot(acct.Key, kv.Key, kv.Value));
+            return list;
+        }
+
         public Dictionary<DateTime, double> Totals(double fundingGuard)
         {
             var dates = new HashSet<DateTime>();

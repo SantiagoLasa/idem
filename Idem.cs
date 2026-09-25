@@ -33,6 +33,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private FillMonitor _fills;
         private CopyEngine _engine;
 
+        private CalendarStore _calendar;
+        private CalendarRecorder _calRecorder;
+        private string _calendarPath;
+
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
@@ -44,6 +48,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try { _engine?.Stop(); } catch { }
                 try { _fills?.StopAll(); } catch { }
                 try { _dayPoll?.Stop(); } catch { }
+                try { _calRecorder?.Stop(); } catch { }
             }
         }
 
@@ -99,10 +104,22 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             _tracker = new PositionTracker();
 
+            _calendarPath = Path.Combine(NinjaTrader.Core.Globals.UserDataDir,
+                "bin", "Custom", "Idem", "idem-calendar.txt");
+            _calendar = new CalendarStore();
+            try
+            {
+                if (File.Exists(_calendarPath))
+                    foreach (var snap in CalendarSerializer.Parse(File.ReadAllText(_calendarPath)))
+                        _calendar.Record(snap.Account, snap.Date, snap.NetLiq);
+            }
+            catch (Exception ex) { Log("calendario load error: " + ex.Message); }
+
             IdemRuntime.Instance = new IdemRuntime
             {
                 Tracker = _tracker,
                 DayCache = _dayCache,
+                Calendar = _calendar,
                 Config = _cfg,
                 Resolve = _resolve,
                 Reconfigure = Reconfigure
@@ -123,6 +140,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             try { _fills?.StopAll(); } catch { }
             try { _dayPoll?.Stop(); } catch { }
+            try { _calRecorder?.Stop(); } catch { }
 
             _fills = new FillMonitor(_tracker, (m, net, inst) =>
             {
@@ -144,6 +162,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             _dayPoll = new DayPnlPoll(_dayCache, slaveAccounts);
             _dayPoll.Start();
+
+            var allAccounts = new List<Account>();
+            if (master != null) allAccounts.Add(master);
+            allAccounts.AddRange(slaveAccounts);
+            _calRecorder = new CalendarRecorder(_calendar, allAccounts, _calendarPath);
+            _calRecorder.Start();
         }
 
         // Aplica una config nueva en vivo: muta la instancia que el motor ya referencia,
