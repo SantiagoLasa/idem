@@ -5,7 +5,12 @@
 
 ## Status
 
-**Última sesión:** 2026-09-24 — ✅ **Fases 1, 2 y 3 COMPLETAS Y VALIDADAS EN SIM.** El copy de Idem está entero: réplica (reconciler-a-target + safety sweep) + **guard de pérdida diaria** + **stop de protección espejado**. Validado por el usuario: el guard bloquea entradas cuando el slave perdió su tope del día (nunca las salidas), y el mirror-stop actualiza precio y cantidad al instante siguiendo al master, se cancela al quedar flat. 35 tests puros en verde + F5 limpio + SIM ok.
+**Última sesión:** 2026-09-25 — ✅ **PROYECTO COMPLETO. Fases 1-5 hechas y validadas.** Idem = copy trader + dashboard local con calendario, todo andando en SIM. Última fase (5, Calendario) cerrada: grilla mensual de P&L con corte 5pm ET, net-liq real, persistencia local y heatmap. **63 tests puros en verde** + F5 limpio + calendario visible. Repo limpio.
+
+**Fase 5 — Calendar (2026-09-25):** calendario de P&L diario DENTRO del dashboard (no nube). Diseño A+1: grilla en la ventana WPF + fuente = snapshot de net-liq a fin de día, P&L = delta día-a-día. Núcleos puros (TDD): `TradingDay.EtDate` (corte 5pm ET, EDT/EST vía TimeZoneInfo "Eastern Standard Time"), `CalendarStore` (P&L = delta día-a-día del cierre + guard de funding), `CalendarSerializer` (persist `idem-calendar.txt`, cultura invariante), `Heatmap` (nivel por signo + intensidad). Cáscara NT8: `CalendarRecorder` (lee **NetLiquidation** en UI-thread, sobrescribe el día en curso = último es el cierre aun si NT8 cierra a mitad de sesión, persiste cada ~60s y al rollover). UI: grilla mensual coloreada, hoy en vivo desde `DayPnlCache` (anda día uno, sin necesitar cierre previo), navegación de mes + total. Extra: el master ahora entra al `DayPnlPoll` (antes su P&L del día quedaba en 0).
+
+---
+**Sesión previa:** 2026-09-24 — ✅ **Fases 1, 2 y 3 COMPLETAS Y VALIDADAS EN SIM.** El copy de Idem está entero: réplica (reconciler-a-target + safety sweep) + **guard de pérdida diaria** + **stop de protección espejado**. Validado por el usuario: el guard bloquea entradas cuando el slave perdió su tope del día (nunca las salidas), y el mirror-stop actualiza precio y cantidad al instante siguiendo al master, se cancela al quedar flat. 35 tests puros en verde + F5 limpio + SIM ok.
 
 **Guard = stop de pérdida diaria** (no proximidad al drawdown): bloquea entradas nuevas cuando el P&L del día (realized+unrealized) llega a `-dailyLossLimit`. Config: `slave=cuenta,perdidaDiaria` (sin cushion). Para testear el stop hay que subir el tope alto (si no, el guard bloquea).
 
@@ -19,8 +24,10 @@
 - [x] **Fase 4 — Dashboard WPF COMPLETA Y VALIDADA.** Menú "Idem → Dashboard" en el Control Center; ventana con: flota en vivo (net, P&L del día, ⚠ guard bloqueando), feed de réplicas, controles **Pausa/Reanudar** (togglea `Config.Enabled`) y **FLATTEN ALL** (flatea master+slaves), y **editor de config en vivo** (TextBox + Guardar → `Reconfigure` re-watchea cuentas + reescribe el `.txt`, sin reiniciar). Núcleos puros: `FleetView`, `IdemConfigWriter`. Estado vivo publicado por `IdemRuntime`. Gotchas de F5: `OrderAction` ambiguo (alias), `FlattenEverything()` es estático (`Account.FlattenEverything()`), `Flatten(Instrument[])` es de instancia. 46 tests verdes.
 
 ### Next up
-- **Fase 5 — Calendar** local (P&L diario, 5pm ET, persistencia) — última fase.
-- Antes de real: bajar los topes de pérdida diaria a valores reales (están en 5000 para tests) y probar más en SIM.
+- **Proyecto completo — no quedan fases.** Idem es un copy trader + dashboard local con calendario, entero y validado en SIM.
+- **Antes de plata real:** bajar los topes de pérdida diaria a valores reales (están en 5000 para tests, se editan desde el dashboard) y probar más en SIM.
+- **Limitación conocida del calendario:** si NT8 no corre al rollover de 5pm ET, se pierde el snapshot de cierre de ese día y el delta abarca varios días (el guard de funding acota lo grueso). Aceptable para uso personal; hoy siempre anda vía DayPnlCache.
+- **Idea futura opcional:** export CSV / desglose por trade dentro del día (fuera de alcance esta vuelta).
 
 ### Done
 - [x] **Fase 1 — núcleos puros** (`core\`, testeados con `dotnet test`): `Sizing` (1:1), `RiskGuard` (bloquea entradas cerca del DD, nunca salidas), `Reconciler` (delta con signo → Buy/Sell/None), `Types` (OrderAction/ReconcileOrder).
