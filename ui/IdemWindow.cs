@@ -66,8 +66,6 @@ namespace Idem.Ui
         private string _visAvailSig;
         private string _visiblePath;
 
-        // Guard de funding: un delta de net-liq mayor a esto es depósito/retiro, no P&L.
-        private const double FundingGuard = 1000000;
         private readonly UniformGrid _calGrid = new UniformGrid { Columns = 7 };
         private readonly TextBlock _calLabel = new TextBlock();
         private readonly TextBlock _calTotal = new TextBlock();
@@ -645,7 +643,7 @@ namespace Idem.Ui
                 return;
             }
 
-            var totals = rt.Calendar.Totals(FundingGuard);
+            var totals = rt.Calendar.Totals();
             // Hoy en vivo: P&L de sesión (realized+unrealized) sumado sobre master+slaves.
             // Anda desde el día uno (no necesita cierre previo, a diferencia del delta de net-liq).
             var today = TradingDay.EtDate(DateTime.UtcNow);

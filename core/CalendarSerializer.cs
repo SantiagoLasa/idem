@@ -6,13 +6,13 @@ using System.Text;
 namespace Idem.Core
 {
     // Persistencia línea-por-línea del calendario (como idem-config.txt, sin JSON — NT8
-    // net48 no trae System.Text.Json). Formato: snap=<cuenta>|<yyyy-MM-dd>|<netLiq>.
+    // net48 no trae System.Text.Json). Formato: snap=<cuenta>|<yyyy-MM-dd>|<pnlDelDía>.
     // Cultura invariante para que el decimal no dependa del locale de la máquina.
     public static class CalendarSerializer
     {
-        public static List<NetLiqSnapshot> Parse(string text)
+        public static List<DaySnapshot> Parse(string text)
         {
-            var list = new List<NetLiqSnapshot>();
+            var list = new List<DaySnapshot>();
             if (string.IsNullOrEmpty(text)) return list;
 
             foreach (var raw in text.Split('\n'))
@@ -26,21 +26,21 @@ namespace Idem.Core
                 if (!DateTime.TryParseExact(parts[1], "yyyy-MM-dd",
                         CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)) continue;
                 if (!double.TryParse(parts[2], NumberStyles.Float,
-                        CultureInfo.InvariantCulture, out var netLiq)) continue;
+                        CultureInfo.InvariantCulture, out var pnl)) continue;
 
-                list.Add(new NetLiqSnapshot(parts[0], date, netLiq));
+                list.Add(new DaySnapshot(parts[0], date, pnl));
             }
             return list;
         }
 
-        public static string ToText(IEnumerable<NetLiqSnapshot> snapshots)
+        public static string ToText(IEnumerable<DaySnapshot> snapshots)
         {
             var sb = new StringBuilder();
             foreach (var s in snapshots)
             {
                 sb.Append("snap=").Append(s.Account).Append('|')
                   .Append(s.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).Append('|')
-                  .Append(s.NetLiq.ToString(CultureInfo.InvariantCulture)).Append('\n');
+                  .Append(s.Pnl.ToString(CultureInfo.InvariantCulture)).Append('\n');
             }
             return sb.ToString();
         }

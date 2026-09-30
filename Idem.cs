@@ -111,7 +111,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (File.Exists(_calendarPath))
                     foreach (var snap in CalendarSerializer.Parse(File.ReadAllText(_calendarPath)))
-                        _calendar.Record(snap.Account, snap.Date, snap.NetLiq);
+                        _calendar.Record(snap.Account, snap.Date, snap.Pnl);
             }
             catch (Exception ex) { Log("calendario load error: " + ex.Message); }
 

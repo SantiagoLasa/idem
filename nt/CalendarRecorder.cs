@@ -7,12 +7,12 @@ using Idem.Core;
 
 namespace Idem.Nt
 {
-    // Graba el net-liquidation de cada cuenta por día de trading (corte 5pm ET) en el
-    // CalendarStore, leyendo en el UI-thread (donde Account.Get funciona; off-thread da 0).
-    // En cada tick sobrescribe el valor del día en curso, así el valor guardado de un día
-    // es siempre la última lectura de ese día = su cierre, aun si NT8 se cierra a mitad de
-    // sesión. Persiste al .txt cada tanto y al cambiar de día. NetLiquidation (no CashValue):
-    // el skew de PropCommand era justamente esa diferencia.
+    // Graba el P&L del día (realized+unrealized de la sesión) de cada cuenta por día de
+    // trading (corte 5pm ET) en el CalendarStore, leyendo en el UI-thread (donde Account.Get
+    // funciona; off-thread da 0). En cada tick sobrescribe el valor del día en curso, así el
+    // guardado es siempre la última lectura de ese día = su cierre, aun si NT8 se cierra a
+    // mitad de sesión. Persiste al .txt cada tanto y al cambiar de día. Guardar el P&L directo
+    // (no net-liq con delta) hace que el primer día ya muestre el profit sin necesitar baseline.
     public sealed class CalendarRecorder
     {
         private const int TickMs = 10000;      // 10s
@@ -60,8 +60,9 @@ namespace Idem.Nt
             {
                 try
                 {
-                    double nl = acc.Get(AccountItem.NetLiquidation, Currency.UsDollar);
-                    _store.Record(acc.Name, today, nl);
+                    double realized = acc.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
+                    double unrealized = acc.Get(AccountItem.UnrealizedProfitLoss, Currency.UsDollar);
+                    _store.Record(acc.Name, today, realized + unrealized);
                 }
                 catch { }
             }
