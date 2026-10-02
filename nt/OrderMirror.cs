@@ -26,6 +26,11 @@ namespace Idem.Nt
             new Dictionary<string, Dictionary<string, Order>>();
         // orderId del master → su OCO (del master) para agrupar las patas de un bracket
         private readonly Dictionary<string, string> _oco = new Dictionary<string, string>();
+        // órdenes del master ya espejadas ALGUNA VEZ (no sólo las activas). Evita el doble-mirror
+        // si NT8 entrega eventos fuera de orden o re-entra durante Submit (lock re-entrante):
+        // una orden del master se espeja EXACTAMENTE una vez, pase lo que pase (bug 2026-10-02,
+        // slaves abrían 2 contratos por cada 1 del master).
+        private readonly HashSet<string> _seen = new HashSet<string>();
         // snapshot de precio para detectar modificaciones
         private readonly Dictionary<string, double> _lastLimit = new Dictionary<string, double>();
         private readonly Dictionary<string, double> _lastStop = new Dictionary<string, double>();
@@ -53,7 +58,7 @@ namespace Idem.Nt
             try { _connectPoll?.Dispose(); } catch { }
             _connectPoll = null;
             if (_master != null) { try { _master.OrderUpdate -= OnOrderUpdate; } catch { } }
-            lock (_lock) { _map.Clear(); _oco.Clear(); _lastLimit.Clear(); _lastStop.Clear(); }
+            lock (_lock) { _map.Clear(); _oco.Clear(); _lastLimit.Clear(); _lastStop.Clear(); _seen.Clear(); }
         }
 
         private static bool IsConnected(Account a)
@@ -120,16 +125,26 @@ namespace Idem.Nt
                     }
                     else if (IsLive(state))
                     {
-                        if (!mapped)
-                            MirrorNew(o, id);
-                        else if (PriceChanged(o, id))
+                        if (mapped)
                         {
-                            // Modificar IN-PLACE (Change), no cancel+replace: evita el hueco donde
-                            // el stop viejo se llena (fills no deseados en trailing — 2026-10-02).
-                            ChangeMirrors(o, id);
-                            _lastLimit[id] = o.LimitPrice;
-                            _lastStop[id] = o.StopPrice;
+                            if (PriceChanged(o, id))
+                            {
+                                // Modificar IN-PLACE (Change), no cancel+replace: evita el hueco
+                                // donde el stop viejo se llena (fills no deseados en trailing).
+                                ChangeMirrors(o, id);
+                                _lastLimit[id] = o.LimitPrice;
+                                _lastStop[id] = o.StopPrice;
+                            }
                         }
+                        else if (!_seen.Contains(id))
+                        {
+                            // Espejar EXACTAMENTE una vez por orden del master. Marcar _seen ANTES
+                            // de colocar, así un evento tardío/re-entrante no duplica la entrada.
+                            _seen.Add(id);
+                            MirrorNew(o, id);
+                        }
+                        // mapped==false && seen: la orden ya se espejó y llenó/canceló → evento
+                        // tardío, se ignora (no re-espejar).
                     }
                 }
             }
