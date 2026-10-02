@@ -30,7 +30,6 @@
 ### Next up
 - **Antes de plata real:** bajar los topes de pérdida diaria a valores reales (se editan desde el dashboard) y probar más en SIM, incluido el copy a nivel de orden con tu forma real de operar.
 - **Order-mirror — límites conocidos (v1):** (1) órdenes ya vivas antes de que Idem arranque no se espejan (sólo las nuevas). (2) Brackets sin OCO de NT8 en el slave: si un fill se desincroniza puede quedar una pata huérfana apoyada un instante → la cancela el hermano al llenarse / el sweep corrige el neto en ≤1s. (3) ATM con TP/SL "simulados" puede no emitir OrderUpdate hasta dispararse → ahí el slave se apoya en el sweep para el neto. (4) Modificar = cancel+place (pierde prioridad de cola).
-- **`OrderMirrorDecision.SlaveOco`** quedó sin uso (se cambió a cancel-manual de hermanos); se puede limpiar en una pasada de simplify.
 - **Idea futura opcional:** export CSV / desglose por trade; OCO real en el slave (submit de patas juntas con id fresco).
 
 ### Done

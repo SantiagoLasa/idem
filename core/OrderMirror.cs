@@ -39,11 +39,5 @@ namespace Idem.Core
             int qty = (int)Math.Round(masterQty * ratio);
             return new MirrorDecision(true, qty);
         }
-
-        public static string SlaveOco(string masterOco, string slaveName)
-        {
-            if (string.IsNullOrEmpty(masterOco)) return string.Empty;
-            return masterOco + "|" + slaveName;
-        }
     }
 }
