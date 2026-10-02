@@ -32,6 +32,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private DayPnlPoll _dayPoll;
         private FillMonitor _fills;
         private CopyEngine _engine;
+        private OrderMirror _orderMirror;
 
         private CalendarStore _calendar;
         private CalendarRecorder _calRecorder;
@@ -49,6 +50,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try { _fills?.StopAll(); } catch { }
                 try { _dayPoll?.Stop(); } catch { }
                 try { _calRecorder?.Stop(); } catch { }
+                try { _orderMirror?.Stop(); } catch { }
             }
         }
 
@@ -125,9 +127,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Reconfigure = Reconfigure
             };
 
-            var stopExec = new StopExecutor(_tracker, _cfg, _resolve);
-            _engine = new CopyEngine(_tracker, _cfg, _resolve, dayPnl,
-                inst => stopExec.ReconcileStops(inst));
+            // Copy a nivel de orden (OrderMirror) hace la réplica; el stop ahora es una orden
+            // más que el mirror espeja, así que StopExecutor se retira. El sweep del CopyEngine
+            // queda como red de seguridad del neto (sin hook de stop).
+            _engine = new CopyEngine(_tracker, _cfg, _resolve, dayPnl, null);
 
             WireWatches();
             _engine.Start();
@@ -141,6 +144,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { _fills?.StopAll(); } catch { }
             try { _dayPoll?.Stop(); } catch { }
             try { _calRecorder?.Stop(); } catch { }
+            try { _orderMirror?.Stop(); } catch { }
 
             _fills = new FillMonitor(_tracker, (m, net, inst) =>
             {
@@ -151,6 +155,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             var master = _resolve(_cfg.MasterAccount);
             if (master != null) _fills.Watch(master, true);
             else Log("master no encontrado: " + _cfg.MasterAccount);
+
+            // Copy a nivel de orden: espeja las órdenes del master en los slaves.
+            _orderMirror = new OrderMirror(_cfg, _resolve,
+                acc => _dayCache.Get(acc.Name), inst => _engine.NoteInstrument(inst));
+            if (master != null) _orderMirror.Watch(master);
 
             var slaveAccounts = new List<Account>();
             foreach (var sc in _cfg.Slaves)

@@ -30,8 +30,16 @@ namespace Idem.Nt
 
         public void OnMasterFill(string masterName, int masterNet, Instrument instrument)
         {
+            // La réplica la hace el OrderMirror (copy a nivel de orden). Acá sólo registramos
+            // el instrumento para que el SweepTick (red de seguridad) sepa qué reconciliar.
             _lastInstrument = instrument;
-            Reconcile(masterNet, instrument);
+        }
+
+        // El OrderMirror avisa el instrumento al apoyar una orden, así el SweepTick (red de
+        // seguridad) puede reconciliar el neto aunque todavía no haya habido ningún fill.
+        public void NoteInstrument(Instrument instrument)
+        {
+            if (instrument != null) _lastInstrument = instrument;
         }
 
         public void Start()

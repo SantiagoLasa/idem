@@ -37,5 +37,26 @@ namespace Idem.Nt
                 slave.Submit(new[] { order });
             }
         }
+
+        // Orden genérica para el copy a nivel de orden: espeja tipo/precio/OCO del master.
+        // Devuelve la orden creada (para mapearla y poder cancelarla). Tag "IdemMirror".
+        public static Order Submit(Account slave, Instrument instrument, OrderType type,
+            OrderAction action, int qty, double limitPrice, double stopPrice, string oco)
+        {
+            if (slave == null || instrument == null || qty <= 0) return null;
+
+            string key = slave.Name + "|" + instrument.FullName;
+            lock (LockFor(key))
+            {
+                double lp = limitPrice > 0 ? instrument.MasterInstrument.RoundToTickSize(limitPrice) : 0;
+                double sp = stopPrice > 0 ? instrument.MasterInstrument.RoundToTickSize(stopPrice) : 0;
+                var order = slave.CreateOrder(
+                    instrument, action, type, OrderEntry.Manual,
+                    TimeInForce.Day, qty, lp, sp, oco ?? string.Empty,
+                    "IdemMirror", DateTime.MaxValue, null);
+                slave.Submit(new[] { order });
+                return order;
+            }
+        }
     }
 }
