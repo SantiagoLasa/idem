@@ -15,9 +15,8 @@ namespace Idem.Nt
         private readonly Func<string, Account> _resolve;
         private readonly Func<Account, double> _dayPnl;   // P&L del día por cuenta (realized+unrealized)
         private readonly Action<Instrument> _onSweepTick;
-        private readonly PendingIntents _pending = new PendingIntents();
-        private static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
-        private const long PendingTimeoutMs = 3000;
+        private readonly Dictionary<string, int> _divergeCount = new Dictionary<string, int>();
+        private const int DebounceTicks = 2; // divergencia persistente ≥2s antes de que el sweep actúe
         private Timer _sweep;
         private Instrument _lastInstrument;
 
@@ -62,21 +61,69 @@ namespace Idem.Nt
                 var master = _resolve(_cfg.MasterAccount);
                 if (master == null) return;
 
-                // HEAL: re-seedear el tracker con el net REAL del broker. El event-path
-                // puede driftear bajo carga (NT8 dropea/batchea ExecutionUpdate); el sweep
-                // corrige a la verdad del broker cada 1s → destraba posiciones colgadas.
+                // Red de seguridad REDUCE-ONLY: lee el net real del broker y SÓLO cierra la
+                // exposición de más del slave (lo que el master ya no tiene), nunca abre. Las
+                // entradas las hace exclusivamente el order-mirror. Esto mata la doble-entrada
+                // que hacía sobre-operar a los slaves ~3,5x (incidente 2026-10-02). Sigue
+                // destrabando una posición colgada (master salió, slave quedó adentro).
                 int masterReal = RealNet(master, inst);
                 _tracker.Seed(master.Name + "|" + inst.FullName, masterReal);
+
                 foreach (var sc in _cfg.Slaves)
                 {
                     var acc = _resolve(sc.Account);
-                    if (acc != null) _tracker.Seed(sc.Account + "|" + inst.FullName, RealNet(acc, inst));
+                    if (acc == null) continue;
+
+                    int slaveNet = RealNet(acc, inst);
+                    _tracker.Seed(sc.Account + "|" + inst.FullName, slaveNet);
+
+                    int target = SweepReduce.Target(masterReal, slaveNet);
+                    int delta = target - slaveNet;
+
+                    // El sweep NO actúa si el mirror está trabajando una orden para este slave
+                    // (deja que el mirror resuelva; si no, doble-salida → posición contraria).
+                    // Y sólo tras DebounceTicks de divergencia persistente, para cubrir órdenes
+                    // en vuelo. Así sólo cierra una posición GENUINAMENTE colgada.
+                    if (delta == 0 || HasWorkingMirror(acc, inst))
+                    {
+                        _divergeCount[sc.Account] = 0;
+                        continue;
+                    }
+
+                    _divergeCount.TryGetValue(sc.Account, out int n);
+                    n++;
+                    _divergeCount[sc.Account] = n;
+                    if (n < DebounceTicks) continue;
+                    _divergeCount[sc.Account] = 0;
+
+                    var action = delta > 0 ? Idem.Core.OrderAction.Buy : Idem.Core.OrderAction.Sell;
+                    OrderSubmit.Market(acc, inst, action, Math.Abs(delta));
+                    IdemRuntime.Instance?.AddFeed("sweep cierra colgada " + sc.Account + " " + action + " " + Math.Abs(delta));
                 }
 
-                Reconcile(masterReal, inst);
                 try { _onSweepTick?.Invoke(inst); } catch { }
             }
             catch { }
+        }
+
+        // ¿El slave tiene alguna orden IdemMirror viva para este instrumento? Si sí, el mirror
+        // está resolviendo la posición → el sweep no se mete (evita doble-acción).
+        private static bool HasWorkingMirror(Account acc, Instrument instrument)
+        {
+            try
+            {
+                lock (acc.Orders)
+                {
+                    foreach (Order o in acc.Orders)
+                        if (o.Name == "IdemMirror" && o.Instrument == instrument
+                            && (o.OrderState == OrderState.Working || o.OrderState == OrderState.Accepted
+                                || o.OrderState == OrderState.Submitted || o.OrderState == OrderState.TriggerPending
+                                || o.OrderState == OrderState.ChangeSubmitted))
+                            return true;
+                }
+            }
+            catch { }
+            return false;
         }
 
         // Net real de una cuenta para un instrumento, leído del broker (no del tracker).
@@ -96,50 +143,6 @@ namespace Idem.Nt
             }
             catch { }
             return 0;
-        }
-
-        private void Reconcile(int masterNet, Instrument instrument)
-        {
-            if (!_cfg.Enabled) return;
-
-            var states = new List<SlaveState>(_cfg.Slaves.Count);
-            var byId = new Dictionary<string, Account>();
-            foreach (var sc in _cfg.Slaves)
-            {
-                var acc = _resolve(sc.Account);
-                if (acc == null) continue;
-                byId[sc.Account] = acc;
-                states.Add(new SlaveState
-                {
-                    Id = sc.Account,
-                    Net = _tracker.Net(sc.Account + "|" + instrument.FullName),
-                    DayPnl = _dayPnl(acc),
-                    DailyLossLimit = sc.DailyLossLimit
-                });
-            }
-
-            foreach (var d in CopyDecision.ForMasterNet(masterNet, states))
-            {
-                if (d.Blocked)
-                {
-                    IdemRuntime.Instance?.AddFeed(d.Id + " BLOQUEADO (guard)");
-                    continue;
-                }
-                if (d.Action == Idem.Core.OrderAction.None) continue;
-                if (byId.TryGetValue(d.Id, out var acc))
-                {
-                    string key = d.Id + "|" + instrument.FullName;
-                    long now = _clock.ElapsedMilliseconds;
-                    int curNet = _tracker.Net(key);
-                    // Guard de orden en vuelo: si ya hay una orden para este par sin
-                    // confirmar, no mandar otra (evita apilar duplicados en scalping rápido).
-                    if (_pending.ShouldSkip(key, curNet, now)) continue;
-
-                    OrderSubmit.Market(acc, instrument, d.Action, d.Qty);
-                    _pending.Register(key, masterNet, now, PendingTimeoutMs);
-                    IdemRuntime.Instance?.AddFeed(d.Id + " " + d.Action + " " + d.Qty + " " + instrument.FullName);
-                }
-            }
         }
     }
 }

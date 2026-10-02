@@ -124,9 +124,11 @@ namespace Idem.Nt
                             MirrorNew(o, id);
                         else if (PriceChanged(o, id))
                         {
-                            CancelSlavesOf(id);
-                            Forget(id);
-                            MirrorNew(o, id);
+                            // Modificar IN-PLACE (Change), no cancel+replace: evita el hueco donde
+                            // el stop viejo se llena (fills no deseados en trailing — 2026-10-02).
+                            ChangeMirrors(o, id);
+                            _lastLimit[id] = o.LimitPrice;
+                            _lastStop[id] = o.StopPrice;
                         }
                     }
                 }
@@ -165,9 +167,14 @@ namespace Idem.Nt
                 var d = OrderMirrorDecision.Decide(side, qty, slaveNet, pnl, sc.DailyLossLimit, 1);
                 if (!d.Place || d.Qty <= 0) continue;
 
+                // Acción normalizada a Buy/Sell (no BuyToCover/SellShort del master): NT8 con
+                // OrderEntry.Manual abre o cierra según la posición REAL del slave. Copiar
+                // "Buy to cover" tal cual abriría un long desde flat (el bug del 2026-10-01).
+                NtOrderAction ntAction = side == MirrorSide.Buy ? NtOrderAction.Buy : NtOrderAction.Sell;
+
                 // Sin OCO de NT8 en el slave (ver nota de clase): el bracket se maneja cancelando
                 // las patas hermanas cuando una del grupo se llena.
-                var mirror = OrderSubmit.Submit(slave, o.Instrument, o.OrderType, o.OrderAction,
+                var mirror = OrderSubmit.Submit(slave, o.Instrument, o.OrderType, ntAction,
                     d.Qty, o.LimitPrice, o.StopPrice, string.Empty);
                 if (mirror != null) slaves[slave.Name] = mirror;
             }
@@ -198,6 +205,20 @@ namespace Idem.Nt
             }
         }
 
+        private void ChangeMirrors(Order o, string id)
+        {
+            if (!_map.TryGetValue(id, out var slaves)) return;
+            int qty = o.Quantity - o.Filled;
+            foreach (var kv in slaves)
+            {
+                var slave = _resolve(kv.Key);
+                var order = kv.Value;
+                if (slave == null || order == null) continue;
+                if (order.OrderState == OrderState.Filled || order.OrderState == OrderState.Cancelled) continue;
+                OrderSubmit.Change(slave, order, o.LimitPrice, o.StopPrice, qty > 0 ? qty : order.Quantity);
+            }
+        }
+
         private void CancelSlavesOf(string id)
         {
             if (!_map.TryGetValue(id, out var slaves)) return;
@@ -217,6 +238,28 @@ namespace Idem.Nt
             _oco.Remove(id);
             _lastLimit.Remove(id);
             _lastStop.Remove(id);
+        }
+
+        // Cancela las órdenes IdemMirror que quedaron apoyadas de una sesión anterior. Idem no
+        // puede retomarlas (no están en su mapa nuevo); si no se cancelan, pueden llenarse solas
+        // al reiniciar y abrir posiciones (incidente 2026-10-01). Se corre una vez al Boot.
+        public static void CancelTagged(Account acc)
+        {
+            if (acc == null) return;
+            try
+            {
+                var toCancel = new List<Order>();
+                lock (acc.Orders)
+                {
+                    foreach (Order o in acc.Orders)
+                        if (o.Name == "IdemMirror"
+                            && (o.OrderState == OrderState.Working || o.OrderState == OrderState.Accepted
+                                || o.OrderState == OrderState.TriggerPending))
+                            toCancel.Add(o);
+                }
+                foreach (var o in toCancel) { try { acc.Cancel(new[] { o }); } catch { } }
+            }
+            catch { }
         }
 
         private static int RealNet(Account acc, Instrument instrument)

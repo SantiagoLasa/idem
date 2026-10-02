@@ -133,6 +133,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             _engine = new CopyEngine(_tracker, _cfg, _resolve, dayPnl, null);
 
             WireWatches();
+
+            // Cancelar órdenes espejo huérfanas de una sesión anterior (quedan apoyadas en el
+            // broker y pueden llenarse solas al reiniciar — incidente 2026-10-01). Una vez, al Boot.
+            foreach (var sc in _cfg.Slaves)
+                OrderMirror.CancelTagged(_resolve(sc.Account));
+
             _engine.Start();
             Log("motor arrancado (master " + _cfg.MasterAccount + ", " + _cfg.Slaves.Count + " slaves, enabled=" + _cfg.Enabled + ")");
         }

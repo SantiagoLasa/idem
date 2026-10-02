@@ -58,5 +58,24 @@ namespace Idem.Nt
                 return order;
             }
         }
+
+        // Modifica una orden espejo IN-PLACE (sin cancelar+recrear). Clave: cancel+replace deja
+        // un hueco donde el precio puede tocar el stop viejo y llenarlo (fills no deseados en
+        // trailing — incidente 2026-10-02). Change mueve el precio sin ese hueco, como el master.
+        public static void Change(Account slave, Order order, double limitPrice, double stopPrice, int qty)
+        {
+            if (slave == null || order == null) return;
+            try
+            {
+                var mi = order.Instrument.MasterInstrument;
+                if (order.OrderType == OrderType.Limit || order.OrderType == OrderType.StopLimit)
+                    order.LimitPriceChanged = limitPrice > 0 ? mi.RoundToTickSize(limitPrice) : order.LimitPrice;
+                if (order.OrderType == OrderType.StopMarket || order.OrderType == OrderType.StopLimit)
+                    order.StopPriceChanged = stopPrice > 0 ? mi.RoundToTickSize(stopPrice) : order.StopPrice;
+                order.QuantityChanged = qty > 0 ? qty : order.Quantity;
+                slave.Change(new[] { order });
+            }
+            catch { }
+        }
     }
 }
