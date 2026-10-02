@@ -5,7 +5,9 @@
 
 ## Status
 
-**Última sesión:** 2026-09-25 — ✅ **PROYECTO COMPLETO. Fases 1-5 hechas y validadas.** Idem = copy trader + dashboard local con calendario, todo andando en SIM. Última fase (5, Calendario) cerrada: grilla mensual de P&L con corte 5pm ET, net-liq real, persistencia local y heatmap. **63 tests puros en verde** + F5 limpio + calendario visible. Repo limpio.
+**Última sesión:** 2026-10-01 — ✅ **Fase 6: COPY A NIVEL DE ORDEN, validado en SIM.** El motor dejó de copiar al *fill* del master y ahora espeja la *orden* cuando la mandás (`OrderUpdate`): market → todas al mismo instante; límite/TP → al mismo precio; brackets → patas hermanas canceladas por nosotros (sin OCO id de NT8, que no deja reusarlo). Resultado: el P&L de los slaves quedó **muy pegado** al master (antes ~$220 sistemático de spread por ir a mercado post-fill → ahora spread chico). El reconciler/sweep (1s) quedó de red de seguridad; el guard sigue aplicando; `StopExecutor` retirado (el stop es una orden más que se espeja). **69 tests puros en verde.** Validado: market, límite, bracket, cancel/modificar.
+
+**Antes (2026-09-25):** Fases 1-5 completas (copy + guard + mirror-stop + dashboard + calendario). **Fix de calendario (2026-10-01):** se guardaba net-liq con delta y el primer día sin baseline daba $0; ahora se guarda el P&L del día directo (realized+unrealized), persistido. `DaySnapshot` reemplazó `NetLiqSnapshot`.
 
 **Rediseño visual del dashboard (2026-09-25):** todo el dashboard pasó a un sistema de tarjetas (fondo `#111118`, borde redondeado, acento `#3b82f6`). Barra superior con marca + pill de estado (ACTIVO/PAUSADO/SIN MOTOR) + botones estilizados. Flota en columnas (cuenta/net/P&L día/estado) con ★ al master y pill ⚠ BLOQUEADO. Calendario con heatmap por intensidad + degradé. **Editor visual del tope de pérdida diaria** por slave (campo $ + barra de progreso en vivo verde→ámbar→rojo). **Selector de master y slaves** como tabla de radios/checks (sin escribir nombres), con **desplegable "Cuentas visibles"** que filtra las cuentas quemadas del listado de NT8 (persistido en `idem-visible.txt`, gitignored). La config cruda quedó como "Configuración avanzada". Helpers compartidos en `IdemWindow`: `Btn`, `SectionCard`, `FleetGrid`, `WarnPill`, `Col`, `HeaderLabel`. Flujo 100% visual: elegir cuentas → ajustar topes → Pausa/Flatten. Repo público en github.com/SantiagoLasa/idem (privado).
 
@@ -26,10 +28,10 @@
 - [x] **Fase 4 — Dashboard WPF COMPLETA Y VALIDADA.** Menú "Idem → Dashboard" en el Control Center; ventana con: flota en vivo (net, P&L del día, ⚠ guard bloqueando), feed de réplicas, controles **Pausa/Reanudar** (togglea `Config.Enabled`) y **FLATTEN ALL** (flatea master+slaves), y **editor de config en vivo** (TextBox + Guardar → `Reconfigure` re-watchea cuentas + reescribe el `.txt`, sin reiniciar). Núcleos puros: `FleetView`, `IdemConfigWriter`. Estado vivo publicado por `IdemRuntime`. Gotchas de F5: `OrderAction` ambiguo (alias), `FlattenEverything()` es estático (`Account.FlattenEverything()`), `Flatten(Instrument[])` es de instancia. 46 tests verdes.
 
 ### Next up
-- **Proyecto completo — no quedan fases.** Idem es un copy trader + dashboard local con calendario, entero y validado en SIM.
-- **Antes de plata real:** bajar los topes de pérdida diaria a valores reales (están en 5000 para tests, se editan desde el dashboard) y probar más en SIM.
-- **Limitación conocida del calendario:** si NT8 no corre al rollover de 5pm ET, se pierde el snapshot de cierre de ese día y el delta abarca varios días (el guard de funding acota lo grueso). Aceptable para uso personal; hoy siempre anda vía DayPnlCache.
-- **Idea futura opcional:** export CSV / desglose por trade dentro del día (fuera de alcance esta vuelta).
+- **Antes de plata real:** bajar los topes de pérdida diaria a valores reales (se editan desde el dashboard) y probar más en SIM, incluido el copy a nivel de orden con tu forma real de operar.
+- **Order-mirror — límites conocidos (v1):** (1) órdenes ya vivas antes de que Idem arranque no se espejan (sólo las nuevas). (2) Brackets sin OCO de NT8 en el slave: si un fill se desincroniza puede quedar una pata huérfana apoyada un instante → la cancela el hermano al llenarse / el sweep corrige el neto en ≤1s. (3) ATM con TP/SL "simulados" puede no emitir OrderUpdate hasta dispararse → ahí el slave se apoya en el sweep para el neto. (4) Modificar = cancel+place (pierde prioridad de cola).
+- **`OrderMirrorDecision.SlaveOco`** quedó sin uso (se cambió a cancel-manual de hermanos); se puede limpiar en una pasada de simplify.
+- **Idea futura opcional:** export CSV / desglose por trade; OCO real en el slave (submit de patas juntas con id fresco).
 
 ### Done
 - [x] **Fase 1 — núcleos puros** (`core\`, testeados con `dotnet test`): `Sizing` (1:1), `RiskGuard` (bloquea entradas cerca del DD, nunca salidas), `Reconciler` (delta con signo → Buy/Sell/None), `Types` (OrderAction/ReconcileOrder).

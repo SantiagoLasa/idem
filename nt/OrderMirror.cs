@@ -7,10 +7,12 @@ using NtOrderAction = NinjaTrader.Cbi.OrderAction;
 namespace Idem.Nt
 {
     // Copy a nivel de ORDEN: espeja la orden del master cuando la manda (OrderUpdate), no
-    // cuando se llena. Market → todas al mismo instante; límite/TP → al mismo precio; bracket →
-    // OCO espejado por slave. Modificar = cancel+place (patrón de StopExecutor). El guard
-    // saltea entradas de un slave pasado de tope. El SweepTick del CopyEngine queda de red de
-    // seguridad para el neto residual. Suscribe sólo tras Connected (poll, como el FillMonitor).
+    // cuando se llena. Market → todas al mismo instante; límite/TP → al mismo precio.
+    // Brackets (TP+SL): NT8 NO deja reusar un OCO id entre submits separados (las 2 patas
+    // comparten el OCO del master), así que NO usamos OCO de NT8 en los slaves — en cambio,
+    // cuando una pata del grupo se llena, cancelamos las otras patas del grupo en los slaves
+    // (comportamiento OCO manejado por nosotros). El guard saltea entradas de slaves pasados
+    // de tope. El SweepTick del CopyEngine queda de red de seguridad del neto.
     public sealed class OrderMirror
     {
         private readonly IdemConfig _cfg;
@@ -22,6 +24,8 @@ namespace Idem.Nt
         // orderId del master → (slave → orden espejo)
         private readonly Dictionary<string, Dictionary<string, Order>> _map =
             new Dictionary<string, Dictionary<string, Order>>();
+        // orderId del master → su OCO (del master) para agrupar las patas de un bracket
+        private readonly Dictionary<string, string> _oco = new Dictionary<string, string>();
         // snapshot de precio para detectar modificaciones
         private readonly Dictionary<string, double> _lastLimit = new Dictionary<string, double>();
         private readonly Dictionary<string, double> _lastStop = new Dictionary<string, double>();
@@ -49,7 +53,7 @@ namespace Idem.Nt
             try { _connectPoll?.Dispose(); } catch { }
             _connectPoll = null;
             if (_master != null) { try { _master.OrderUpdate -= OnOrderUpdate; } catch { } }
-            lock (_lock) { _map.Clear(); _lastLimit.Clear(); _lastStop.Clear(); }
+            lock (_lock) { _map.Clear(); _oco.Clear(); _lastLimit.Clear(); _lastStop.Clear(); }
         }
 
         private static bool IsConnected(Account a)
@@ -103,12 +107,15 @@ namespace Idem.Nt
 
                     if (state == OrderState.Filled)
                     {
-                        // La espejo llena sola (mismo precio) / el OCO cancela la otra pata.
+                        // La espejo de ESTA pata se llena sola (mismo precio) → no la cancelo.
+                        // Pero si era parte de un bracket, cancelo las OTRAS patas del grupo.
+                        string group = OcoOf(id);
                         Forget(id);
+                        if (!string.IsNullOrEmpty(group)) CancelGroupSiblings(group);
                     }
                     else if (state == OrderState.Cancelled || state == OrderState.Rejected)
                     {
-                        if (mapped) CancelMirrors(id);
+                        if (mapped) CancelSlavesOf(id);
                         Forget(id);
                     }
                     else if (IsLive(state))
@@ -117,7 +124,7 @@ namespace Idem.Nt
                             MirrorNew(o, id);
                         else if (PriceChanged(o, id))
                         {
-                            CancelMirrors(id);
+                            CancelSlavesOf(id);
                             Forget(id);
                             MirrorNew(o, id);
                         }
@@ -125,6 +132,12 @@ namespace Idem.Nt
                 }
             }
             catch { /* nunca tirar desde el handler de NT8 */ }
+        }
+
+        private string OcoOf(string id)
+        {
+            _oco.TryGetValue(id, out string v);
+            return v;
         }
 
         private bool PriceChanged(Order o, string id)
@@ -152,15 +165,17 @@ namespace Idem.Nt
                 var d = OrderMirrorDecision.Decide(side, qty, slaveNet, pnl, sc.DailyLossLimit, 1);
                 if (!d.Place || d.Qty <= 0) continue;
 
-                string oco = OrderMirrorDecision.SlaveOco(o.Oco, slave.Name);
+                // Sin OCO de NT8 en el slave (ver nota de clase): el bracket se maneja cancelando
+                // las patas hermanas cuando una del grupo se llena.
                 var mirror = OrderSubmit.Submit(slave, o.Instrument, o.OrderType, o.OrderAction,
-                    d.Qty, o.LimitPrice, o.StopPrice, oco);
+                    d.Qty, o.LimitPrice, o.StopPrice, string.Empty);
                 if (mirror != null) slaves[slave.Name] = mirror;
             }
 
             if (slaves.Count > 0)
             {
                 _map[id] = slaves;
+                _oco[id] = o.Oco;
                 _lastLimit[id] = o.LimitPrice;
                 _lastStop[id] = o.StopPrice;
                 IdemRuntime.Instance?.AddFeed("orden " + o.OrderType + " " + o.OrderAction + " x" + qty
@@ -168,7 +183,22 @@ namespace Idem.Nt
             }
         }
 
-        private void CancelMirrors(string id)
+        // Cancela las patas hermanas de un bracket (mismo OCO del master), menos las ya
+        // olvidadas. Replica el OCO del master del lado del slave sin usar un OCO id de NT8.
+        private void CancelGroupSiblings(string group)
+        {
+            var ids = new List<string>();
+            foreach (var kv in _oco)
+                if (kv.Value == group) ids.Add(kv.Key);
+
+            foreach (var sid in ids)
+            {
+                CancelSlavesOf(sid);
+                Forget(sid);
+            }
+        }
+
+        private void CancelSlavesOf(string id)
         {
             if (!_map.TryGetValue(id, out var slaves)) return;
             foreach (var kv in slaves)
@@ -184,6 +214,7 @@ namespace Idem.Nt
         private void Forget(string id)
         {
             _map.Remove(id);
+            _oco.Remove(id);
             _lastLimit.Remove(id);
             _lastStop.Remove(id);
         }
