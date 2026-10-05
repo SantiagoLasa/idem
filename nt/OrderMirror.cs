@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using NinjaTrader.Cbi;
 using Idem.Core;
 using NtOrderAction = NinjaTrader.Cbi.OrderAction;
@@ -13,27 +14,38 @@ namespace Idem.Nt
     // cuando una pata del grupo se llena, cancelamos las otras patas del grupo en los slaves
     // (comportamiento OCO manejado por nosotros). El guard saltea entradas de slaves pasados
     // de tope. El SweepTick del CopyEngine queda de red de seguridad del neto.
+    //
+    // CLAVE (bug 2026-10-05, Rithmic): se identifica cada orden del master por el OBJETO Order
+    // (NT8 reusa la misma instancia entre eventos), NO por OrderId — en Rithmic el OrderId es
+    // temporal al Submitted y real al Accepted (cambia), y espejar por OrderId duplicaba la
+    // orden (slaves abrían 2 contratos por cada 1). La referencia del objeto es estable siempre.
     public sealed class OrderMirror
     {
+        // Comparador por identidad de objeto (no por OrderId, que cambia).
+        private sealed class OrderRef : IEqualityComparer<Order>
+        {
+            public static readonly OrderRef Instance = new OrderRef();
+            public bool Equals(Order a, Order b) { return ReferenceEquals(a, b); }
+            public int GetHashCode(Order o) { return RuntimeHelpers.GetHashCode(o); }
+        }
+
         private readonly IdemConfig _cfg;
         private readonly Func<string, Account> _resolve;
         private readonly Func<Account, double> _dayPnl;
         private readonly Action<Instrument> _onInstrument;
         private readonly object _lock = new object();
 
-        // orderId del master → (slave → orden espejo)
-        private readonly Dictionary<string, Dictionary<string, Order>> _map =
-            new Dictionary<string, Dictionary<string, Order>>();
-        // orderId del master → su OCO (del master) para agrupar las patas de un bracket
-        private readonly Dictionary<string, string> _oco = new Dictionary<string, string>();
-        // órdenes del master ya espejadas ALGUNA VEZ (no sólo las activas). Evita el doble-mirror
-        // si NT8 entrega eventos fuera de orden o re-entra durante Submit (lock re-entrante):
-        // una orden del master se espeja EXACTAMENTE una vez, pase lo que pase (bug 2026-10-02,
-        // slaves abrían 2 contratos por cada 1 del master).
-        private readonly HashSet<string> _seen = new HashSet<string>();
+        // orden del master → (slave → orden espejo)
+        private readonly Dictionary<Order, Dictionary<string, Order>> _map =
+            new Dictionary<Order, Dictionary<string, Order>>(OrderRef.Instance);
+        // orden del master → su OCO (del master) para agrupar las patas de un bracket
+        private readonly Dictionary<Order, string> _oco = new Dictionary<Order, string>(OrderRef.Instance);
+        // órdenes del master ya espejadas ALGUNA VEZ: una orden se espeja EXACTAMENTE una vez,
+        // aunque lleguen eventos fuera de orden o re-entre el handler.
+        private readonly HashSet<Order> _seen = new HashSet<Order>(OrderRef.Instance);
         // snapshot de precio para detectar modificaciones
-        private readonly Dictionary<string, double> _lastLimit = new Dictionary<string, double>();
-        private readonly Dictionary<string, double> _lastStop = new Dictionary<string, double>();
+        private readonly Dictionary<Order, double> _lastLimit = new Dictionary<Order, double>(OrderRef.Instance);
+        private readonly Dictionary<Order, double> _lastStop = new Dictionary<Order, double>(OrderRef.Instance);
 
         private Account _master;
         private System.Threading.Timer _connectPoll;
@@ -103,45 +115,44 @@ namespace Idem.Nt
                 _onInstrument?.Invoke(o.Instrument);
                 if (IdemRuntime.Instance != null) IdemRuntime.Instance.LastInstrument = o.Instrument;
 
-                string id = o.OrderId;
                 var state = o.OrderState;
 
                 lock (_lock)
                 {
-                    bool mapped = _map.ContainsKey(id);
+                    bool mapped = _map.ContainsKey(o);
 
                     if (state == OrderState.Filled)
                     {
                         // La espejo de ESTA pata se llena sola (mismo precio) → no la cancelo.
                         // Pero si era parte de un bracket, cancelo las OTRAS patas del grupo.
-                        string group = OcoOf(id);
-                        Forget(id);
+                        string group = OcoOf(o);
+                        Forget(o);
                         if (!string.IsNullOrEmpty(group)) CancelGroupSiblings(group);
                     }
                     else if (state == OrderState.Cancelled || state == OrderState.Rejected)
                     {
-                        if (mapped) CancelSlavesOf(id);
-                        Forget(id);
+                        if (mapped) CancelSlavesOf(o);
+                        Forget(o);
                     }
                     else if (IsLive(state))
                     {
                         if (mapped)
                         {
-                            if (PriceChanged(o, id))
+                            if (PriceChanged(o))
                             {
                                 // Modificar IN-PLACE (Change), no cancel+replace: evita el hueco
                                 // donde el stop viejo se llena (fills no deseados en trailing).
-                                ChangeMirrors(o, id);
-                                _lastLimit[id] = o.LimitPrice;
-                                _lastStop[id] = o.StopPrice;
+                                ChangeMirrors(o);
+                                _lastLimit[o] = o.LimitPrice;
+                                _lastStop[o] = o.StopPrice;
                             }
                         }
-                        else if (!_seen.Contains(id))
+                        else if (!_seen.Contains(o))
                         {
                             // Espejar EXACTAMENTE una vez por orden del master. Marcar _seen ANTES
                             // de colocar, así un evento tardío/re-entrante no duplica la entrada.
-                            _seen.Add(id);
-                            MirrorNew(o, id);
+                            _seen.Add(o);
+                            MirrorNew(o);
                         }
                         // mapped==false && seen: la orden ya se espejó y llenó/canceló → evento
                         // tardío, se ignora (no re-espejar).
@@ -151,20 +162,20 @@ namespace Idem.Nt
             catch { /* nunca tirar desde el handler de NT8 */ }
         }
 
-        private string OcoOf(string id)
+        private string OcoOf(Order o)
         {
-            _oco.TryGetValue(id, out string v);
+            _oco.TryGetValue(o, out string v);
             return v;
         }
 
-        private bool PriceChanged(Order o, string id)
+        private bool PriceChanged(Order o)
         {
-            _lastLimit.TryGetValue(id, out double ll);
-            _lastStop.TryGetValue(id, out double ls);
+            _lastLimit.TryGetValue(o, out double ll);
+            _lastStop.TryGetValue(o, out double ls);
             return o.LimitPrice != ll || o.StopPrice != ls;
         }
 
-        private void MirrorNew(Order o, string id)
+        private void MirrorNew(Order o)
         {
             int qty = o.Quantity - o.Filled;
             if (qty <= 0) return;
@@ -196,10 +207,10 @@ namespace Idem.Nt
 
             if (slaves.Count > 0)
             {
-                _map[id] = slaves;
-                _oco[id] = o.Oco;
-                _lastLimit[id] = o.LimitPrice;
-                _lastStop[id] = o.StopPrice;
+                _map[o] = slaves;
+                _oco[o] = o.Oco;
+                _lastLimit[o] = o.LimitPrice;
+                _lastStop[o] = o.StopPrice;
                 IdemRuntime.Instance?.AddFeed("orden " + o.OrderType + " " + o.OrderAction + " x" + qty
                     + " → " + slaves.Count + " slaves");
             }
@@ -209,20 +220,20 @@ namespace Idem.Nt
         // olvidadas. Replica el OCO del master del lado del slave sin usar un OCO id de NT8.
         private void CancelGroupSiblings(string group)
         {
-            var ids = new List<string>();
+            var orders = new List<Order>();
             foreach (var kv in _oco)
-                if (kv.Value == group) ids.Add(kv.Key);
+                if (kv.Value == group) orders.Add(kv.Key);
 
-            foreach (var sid in ids)
+            foreach (var mo in orders)
             {
-                CancelSlavesOf(sid);
-                Forget(sid);
+                CancelSlavesOf(mo);
+                Forget(mo);
             }
         }
 
-        private void ChangeMirrors(Order o, string id)
+        private void ChangeMirrors(Order o)
         {
-            if (!_map.TryGetValue(id, out var slaves)) return;
+            if (!_map.TryGetValue(o, out var slaves)) return;
             int qty = o.Quantity - o.Filled;
             foreach (var kv in slaves)
             {
@@ -234,9 +245,9 @@ namespace Idem.Nt
             }
         }
 
-        private void CancelSlavesOf(string id)
+        private void CancelSlavesOf(Order o)
         {
-            if (!_map.TryGetValue(id, out var slaves)) return;
+            if (!_map.TryGetValue(o, out var slaves)) return;
             foreach (var kv in slaves)
             {
                 var slave = _resolve(kv.Key);
@@ -247,12 +258,12 @@ namespace Idem.Nt
             }
         }
 
-        private void Forget(string id)
+        private void Forget(Order o)
         {
-            _map.Remove(id);
-            _oco.Remove(id);
-            _lastLimit.Remove(id);
-            _lastStop.Remove(id);
+            _map.Remove(o);
+            _oco.Remove(o);
+            _lastLimit.Remove(o);
+            _lastStop.Remove(o);
         }
 
         // Cancela las órdenes IdemMirror que quedaron apoyadas de una sesión anterior. Idem no
